@@ -60,7 +60,9 @@ async def persist_snapshot(items: list[dict]):
             VALUES($1,$2,$3,$4,now())
             ON CONFLICT(code) DO UPDATE SET
               name=excluded.name,market=excluded.market,
-              industry_name=coalesce(nullif(excluded.industry_name,''),stocks.industry_name),
+              industry_name=CASE WHEN stocks.industry_source='sw2021'
+                THEN stocks.industry_name
+                ELSE coalesce(nullif(excluded.industry_name,''),stocks.industry_name) END,
               updated_at=now()
             """,
             [
@@ -114,6 +116,9 @@ class HistoryPayload(BaseModel):
     code: str
     rows: list[dict]
 
+class IndustryImportPayload(BaseModel):
+    items: list[dict]
+
 
 @asynccontextmanager
 async def lifespan(app):
@@ -158,6 +163,32 @@ async def health():
 async def import_snapshot(payload: SnapshotPayload):
     await persist_snapshot(payload.items)
     return {"written": len(payload.items)}
+
+
+@app.post("/api/import/sw-industries")
+async def import_sw_industries(payload: IndustryImportPayload):
+    values = []
+    for item in payload.items:
+        code = str(item.get("code", "")).strip()
+        if len(code) == 6 and code.isdigit() and item.get("l2_name"):
+            values.append((
+                code,item.get("l1_code"),item.get("l1_name"),
+                item.get("l2_code"),item.get("l2_name"),
+            ))
+    async with pool.acquire() as connection:
+        await connection.executemany(
+            """UPDATE stocks SET sw_l1_code=$2::varchar,sw_l1_name=$3::varchar,
+               sw_l2_code=$4::varchar,sw_l2_name=$5::varchar,
+               industry_name=$5::text,industry_source='sw2021',
+               updated_at=now() WHERE code=$1""",
+            values,
+        )
+        stats = await connection.fetchrow(
+            """SELECT count(*) FILTER(WHERE sw_l2_name IS NOT NULL) l2,
+               count(DISTINCT sw_l2_name) industries,count(*) total FROM stocks"""
+        )
+    return {"written": len(values),"l2_covered": stats["l2"],
+            "industries": stats["industries"],"total": stats["total"]}
 
 
 @app.get("/api/backfill/pending")

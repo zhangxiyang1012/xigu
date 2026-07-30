@@ -65,6 +65,8 @@ type IndustryLeader = {
   amplitude_ratio:number; lead_lag_days:number; lead_lag_correlation:number;
   turning_signal:string; turning_date?:string; turning_reasons:string[];
 };
+const reasonText = (value: unknown) =>
+  Array.isArray(value) ? value.join("；") : typeof value === "string" ? value : "";
 const fallback: Stock[] = [
   {
     code: "600519",
@@ -437,11 +439,13 @@ const industryLineColors = ["#d94841","#326eaf","#8256b3","#df8b2f","#168265","#
 function IndustryRotationCompare({
   industries,
   selected,
+  onAdd,
   onRemove,
   onClear,
 }: {
   industries: Industry[];
   selected: string[];
+  onAdd: (name:string)=>void;
   onRemove: (name:string)=>void;
   onClear: ()=>void;
 }) {
@@ -455,7 +459,7 @@ function IndustryRotationCompare({
   });
   const globalMin=Math.min(...lines.map(line=>line.min)),globalMax=Math.max(...lines.map(line=>line.max));
   return <div className="rotation-compare">
-    <div className="compare-head"><div><b>已选行业轮动明细</b><span>最多同时比较6个行业 · 指数统一归一化为100</span></div><button onClick={onClear}>清空选择</button></div>
+    <div className="compare-head"><div><b>已选行业轮动明细</b><span>最多同时比较6个行业 · 指数统一归一化为100</span></div><div className="compare-actions"><select aria-label="选择对比行业" value="" onChange={event=>event.target.value&&onAdd(event.target.value)}><option value="">＋ 选择行业</option>{industries.filter(item=>!selected.includes(item.name)).sort((a,b)=>a.name.localeCompare(b.name,"zh-CN")).map(item=><option key={item.name} value={item.name}>{item.name}</option>)}</select><button onClick={onClear}>清空选择</button></div></div>
     <div className="compare-chips">{lines.map(line=><button key={line.item.name} onClick={()=>onRemove(line.item.name)}><i style={{background:industryLineColors[line.index]}}/>{line.item.name}<span>×</span></button>)}</div>
     <svg viewBox="0 0 900 180" preserveAspectRatio="none" aria-label="多行业90日轮动对比">
       {[0,1,2,3].map(n=><line key={n} x1="0" x2="900" y1={20+n*45} y2={20+n*45}/>)}
@@ -830,7 +834,7 @@ export default function Home() {
           <div className="industry-panel">
             <div className="section-title"><h2>90日行业轮动与风险</h2><span>按轮动强度排序 · {industries.length} 个行业</span></div>
             <IndustryRotationMap industries={industries} selected={selectedIndustries} onToggle={toggleIndustry} />
-            <IndustryRotationCompare industries={industries} selected={selectedIndustries} onRemove={toggleIndustry} onClear={()=>setSelectedIndustries([])} />
+            <IndustryRotationCompare industries={industries} selected={selectedIndustries} onAdd={toggleIndustry} onRemove={toggleIndustry} onClear={()=>setSelectedIndustries([])} />
             <div className="industry-subtitle"><b>最新交易日行业状态</b><span>点击可加入或移出对比，最多选择6个行业</span></div>
             <div className="industry-grid">{industries.slice(0,18).map((x)=><button className={`industry-item ${selectedIndustries.includes(x.name)?"active":""}`} onClick={()=>toggleIndustry(x.name)} key={x.name}><div><b>{x.name}</b><em className={x.avg_change_pct<0?"trend-down":"trend-up"}>{x.avg_change_pct>0?"+":""}{x.avg_change_pct.toFixed(2)}%</em></div><p><span>轮动强度 <strong>{x.rotation_score.toFixed(0)}</strong></span><span>20日 {x.return_20d>0?"+":""}{x.return_20d.toFixed(1)}%</span></p><div className="breadth"><i style={{width:`${x.above_ma20_pct}%`}}/></div><small>MA20上方 {x.above_ma20_pct.toFixed(0)}% · 涨{x.up_count} 跌{x.down_count}</small><strong className={x.phase==="下跌"||x.phase==="退潮"?"trend-down":"trend-up"}>{x.phase}第 {x.phase_days} 天</strong><span className={`risk-pill risk-${x.risk_level}`}>轮动风险 {x.risk_level} {x.risk_score.toFixed(0)}</span></button>)}</div>
             {industries.filter(x=>x.name===selectedIndustry).map(x=><div className="industry-detail" key={x.name}>
@@ -838,13 +842,13 @@ export default function Home() {
               <svg viewBox="0 0 900 120" preserveAspectRatio="none" aria-label={`${x.name}近90日行业指数`}>
                 <polyline points={x.history.map((p,i)=>`${i*900/Math.max(1,x.history.length-1)},${110-(p.index-Math.min(...x.history.map(v=>v.index)))*95/Math.max(.01,Math.max(...x.history.map(v=>v.index))-Math.min(...x.history.map(v=>v.index)))}`).join(" ")} />
               </svg>
-              <div className="risk-reasons"><b>接下来一段时间风险：{x.risk_level}</b><span>{x.risk_reasons.join("；")}</span><small>这是基于价格、量能、市场广度与周期位置的概率提示，不构成确定预测。</small></div>
+              <div className="risk-reasons"><b>接下来一段时间风险：{x.risk_level}</b><span>{reasonText(x.risk_reasons)}</span><small>这是基于价格、量能、市场广度与周期位置的概率提示，不构成确定预测。</small></div>
               {!!industryLeaders.filter(v=>v.industry_name===x.name).length&&<div className="leader-analysis">
                 <h3>PDF策略提及的行业核心股</h3>
                 {industryLeaders.filter(v=>v.industry_name===x.name).map(v=><button key={v.stock_code} onClick={()=>setSelected(stocks.find(s=>s.code===v.stock_code)||{code:v.stock_code,name:v.name,market:"",price:0,change:0,volume:0,amount:0,industry_name:v.industry_name})}>
                   <div><b>{v.name}</b><small>{v.stock_code} · {v.strategy_role}</small><strong className={v.turning_signal.includes("转弱")||v.turning_signal.includes("偏弱")?"trend-down":"trend-up"}>{v.turning_signal}</strong></div>
                   <p><span>同向率 {v.direction_match_pct.toFixed(0)}%</span><span>相关性 {v.correlation_90d.toFixed(2)}</span><span>涨跌弹性 {v.amplitude_ratio.toFixed(1)}倍</span><span>{v.lead_lag_days>0?`约领先行业 ${v.lead_lag_days} 日`:v.lead_lag_days<0?`约滞后行业 ${-v.lead_lag_days} 日`:"与行业同步"}</span></p>
-                  <em>{v.turning_reasons.join("；")}</em>
+                  <em>{reasonText(v.turning_reasons)}</em>
                 </button>)}
               </div>}
             </div>)}

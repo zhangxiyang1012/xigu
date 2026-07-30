@@ -4,6 +4,13 @@ CREATE TABLE IF NOT EXISTS stocks (
 );
 CREATE INDEX IF NOT EXISTS stocks_name_idx ON stocks USING gin (to_tsvector('simple', name));
 CREATE INDEX IF NOT EXISTS stocks_market_idx ON stocks (market);
+ALTER TABLE stocks ADD COLUMN IF NOT EXISTS industry_source varchar(24);
+ALTER TABLE stocks ADD COLUMN IF NOT EXISTS sw_l1_code varchar(12);
+ALTER TABLE stocks ADD COLUMN IF NOT EXISTS sw_l1_name varchar(48);
+ALTER TABLE stocks ADD COLUMN IF NOT EXISTS sw_l2_code varchar(12);
+ALTER TABLE stocks ADD COLUMN IF NOT EXISTS sw_l2_name varchar(48);
+ALTER TABLE stocks ADD COLUMN IF NOT EXISTS sw_l3_code varchar(12);
+ALTER TABLE stocks ADD COLUMN IF NOT EXISTS sw_l3_name varchar(48);
 CREATE TABLE IF NOT EXISTS daily_quotes (
   stock_code char(6) NOT NULL REFERENCES stocks(code) ON DELETE CASCADE, trade_date date NOT NULL,
   open numeric(16,4) NOT NULL, high numeric(16,4) NOT NULL, low numeric(16,4) NOT NULL, close numeric(16,4) NOT NULL,

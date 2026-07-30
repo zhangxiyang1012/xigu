@@ -58,6 +58,7 @@ async def refresh(connection: asyncpg.Connection) -> tuple[int, int]:
           JOIN stocks s ON s.code=q.stock_code
           WHERE s.industry_name IS NOT NULL
             AND s.industry_name <> ''
+            AND s.industry_source = 'sw2021'
             AND q.trade_date >= current_date - interval '220 days'
         )
         SELECT industry_name,trade_date,count(*) AS member_count,
