@@ -9,6 +9,8 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from refresh_industries import refresh as refresh_industry_metrics
+from refresh_leaders import refresh as refresh_leader_metrics
 from refresh_tags import refresh as refresh_stock_tags
 
 DB = os.environ["DATABASE_URL"]
@@ -54,16 +56,19 @@ async def persist_snapshot(items: list[dict]):
     async with pool.acquire() as connection, connection.transaction():
         await connection.executemany(
             """
-            INSERT INTO stocks(code,name,market,updated_at)
-            VALUES($1,$2,$3,now())
+            INSERT INTO stocks(code,name,market,industry_name,updated_at)
+            VALUES($1,$2,$3,$4,now())
             ON CONFLICT(code) DO UPDATE SET
-              name=excluded.name,market=excluded.market,updated_at=now()
+              name=excluded.name,market=excluded.market,
+              industry_name=coalesce(nullif(excluded.industry_name,''),stocks.industry_name),
+              updated_at=now()
             """,
             [
                 (
                     str(item["f12"]),
                     str(item.get("f14") or item["f12"]),
                     market(str(item["f12"])),
+                    str(item.get("f100") or ""),
                 )
                 for item in valid
             ],
@@ -115,6 +120,7 @@ async def lifespan(app):
     await init_db()
     scheduler = AsyncIOScheduler(timezone="Asia/Shanghai")
     scheduler.add_job(refresh_tags_job, "cron", hour=17, minute=10)
+    scheduler.add_job(refresh_industries_job, "cron", hour=17, minute=15)
     scheduler.start()
     yield
     scheduler.shutdown()
@@ -133,6 +139,11 @@ app.add_middleware(
 async def refresh_tags_job():
     async with pool.acquire() as connection:
         await refresh_stock_tags(connection)
+
+
+async def refresh_industries_job():
+    async with pool.acquire() as connection:
+        await refresh_industry_metrics(connection)
 
 
 @app.get("/health")
@@ -230,11 +241,13 @@ async def stocks(
         )
         rows = await connection.fetch(
             f"""
-            SELECT s.code,s.name,s.market,
+            SELECT s.code,s.name,s.market,s.industry_name,
               coalesce(q.close,0) price,coalesce(q.change_pct,0) change,
               coalesce(q.volume,0) volume,coalesce(q.amount,0) amount,
               coalesce(t.tags,ARRAY[]::text[]) tags,
-              coalesce(t.tag_keys,ARRAY[]::text[]) tag_keys
+              coalesce(t.tag_keys,ARRAY[]::text[]) tag_keys,
+              ir.phase AS industry_phase,ir.risk_level AS industry_risk,
+              ir.risk_score AS industry_risk_score
             FROM stocks s
             LEFT JOIN LATERAL (
               SELECT close,change_pct,volume,amount
@@ -247,6 +260,12 @@ async def stocks(
                 array_agg(tag_key ORDER BY category,tag_name) tag_keys
               FROM stock_tags WHERE stock_code=s.code
             ) t ON true
+            LEFT JOIN LATERAL (
+              SELECT phase,risk_level,risk_score
+              FROM industry_daily_metrics
+              WHERE industry_name=s.industry_name
+              ORDER BY trade_date DESC LIMIT 1
+            ) ir ON true
             WHERE cardinality($1::text[]) = 0 OR (
               SELECT count(DISTINCT tag_key) FROM stock_tags
               WHERE stock_code=s.code AND tag_key=ANY($1::text[])
@@ -273,11 +292,13 @@ async def search(q: str, tags: str = "", sort: str = "desc"):
     async with pool.acquire() as connection:
         rows = await connection.fetch(
             f"""
-            SELECT s.code,s.name,s.market,
+            SELECT s.code,s.name,s.market,s.industry_name,
               coalesce(d.close,0) price,coalesce(d.change_pct,0) change,
               coalesce(d.volume,0) volume,coalesce(d.amount,0) amount,
               coalesce(t.tags,ARRAY[]::text[]) tags,
-              coalesce(t.tag_keys,ARRAY[]::text[]) tag_keys
+              coalesce(t.tag_keys,ARRAY[]::text[]) tag_keys,
+              ir.phase AS industry_phase,ir.risk_level AS industry_risk,
+              ir.risk_score AS industry_risk_score
             FROM stocks s
             LEFT JOIN LATERAL (
               SELECT close,change_pct,volume,amount FROM daily_quotes
@@ -288,6 +309,12 @@ async def search(q: str, tags: str = "", sort: str = "desc"):
                 array_agg(tag_key ORDER BY category,tag_name) tag_keys
               FROM stock_tags WHERE stock_code=s.code
             ) t ON true
+            LEFT JOIN LATERAL (
+              SELECT phase,risk_level,risk_score
+              FROM industry_daily_metrics
+              WHERE industry_name=s.industry_name
+              ORDER BY trade_date DESC LIMIT 1
+            ) ir ON true
             WHERE (
               s.code LIKE $1 OR s.name LIKE $1 OR EXISTS (
                 SELECT 1 FROM stock_tags
@@ -416,8 +443,85 @@ async def history(code: str):
 
 
 @app.get("/api/industries")
-async def industries():
-    return {"source": "本地PostgreSQL", "industries": []}
+async def industries(days: int = 90):
+    days = min(90, max(10, days))
+    async with pool.acquire() as connection:
+        latest = await connection.fetch(
+            """
+            SELECT DISTINCT ON (industry_name)
+              industry_name,trade_date,member_count,avg_change_pct,
+              industry_index,return_20d,amount,amount_ratio,above_ma20_pct,
+              limit_up_count,up_count,down_count,rotation_score,phase,
+              phase_days,risk_score,risk_level,risk_reasons
+            FROM industry_daily_metrics
+            ORDER BY industry_name,trade_date DESC
+            """
+        )
+        history = await connection.fetch(
+            """
+            SELECT industry_name,trade_date,industry_index,rotation_score,
+              phase,risk_score,risk_level,above_ma20_pct
+            FROM industry_daily_metrics
+            WHERE trade_date >= (
+              SELECT max(trade_date) FROM industry_daily_metrics
+            ) - ($1 * interval '1 day')
+            ORDER BY industry_name,trade_date
+            """,
+            days * 2,
+        )
+    histories: dict[str, list[dict]] = {}
+    for row in history:
+        name = row["industry_name"]
+        histories.setdefault(name, []).append(
+            {
+                "date": row["trade_date"].isoformat(),
+                "index": number(row["industry_index"]),
+                "score": number(row["rotation_score"]),
+                "phase": row["phase"],
+                "risk": number(row["risk_score"]),
+                "riskLevel": row["risk_level"],
+                "breadth": number(row["above_ma20_pct"]),
+            }
+        )
+    result = []
+    for row in latest:
+        item = dict(row)
+        name = item.pop("industry_name")
+        item["name"] = name
+        item["date"] = item.pop("trade_date").isoformat()
+        item["history"] = histories.get(name, [])[-days:]
+        result.append(item)
+    result.sort(key=lambda item: number(item["rotation_score"]), reverse=True)
+    return {"source": "本地PostgreSQL", "days": days, "industries": result}
+
+
+@app.post("/api/industries/refresh")
+async def refresh_industries():
+    async with pool.acquire() as connection:
+        industry_count, row_count = await refresh_industry_metrics(connection)
+    return {"industries": industry_count, "rows": row_count}
+
+
+@app.get("/api/industry-leaders")
+async def industry_leaders(industry: str = ""):
+    async with pool.acquire() as connection:
+        rows = await connection.fetch(
+            """
+            SELECT a.*,s.name
+            FROM industry_leader_analysis a JOIN stocks s ON s.code=a.stock_code
+            WHERE ($1='' OR a.industry_name=$1)
+            ORDER BY a.industry_name,a.correlation_90d DESC
+            """,
+            industry,
+        )
+    return {"source": "策略PDF + 本地PostgreSQL", "leaders": [dict(row) for row in rows]}
+
+
+@app.post("/api/industry-leaders/refresh")
+async def refresh_industry_leaders():
+    async with pool.acquire() as connection:
+        count = await refresh_leader_metrics(connection)
+    return {"leaders": count}
 
 
 @app.post("/api/sync/daily")

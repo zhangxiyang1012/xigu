@@ -9,7 +9,7 @@ import urllib.parse
 SOURCE = "https://push2.eastmoney.com/api/qt/clist/get"
 TARGET = "http://127.0.0.1:8000/api/import/snapshot"
 MARKETS = "m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048"
-FIELDS = "f2,f3,f5,f6,f8,f12,f14,f15,f16,f17"
+FIELDS = "f2,f3,f5,f6,f8,f12,f14,f15,f16,f17,f100"
 
 
 def get_json(url: str) -> dict:

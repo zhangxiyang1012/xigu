@@ -9,6 +9,10 @@ type Stock = {
   change: number;
   volume: number;
   amount: number;
+  industry_name?: string;
+  industry_phase?: string;
+  industry_risk?: string;
+  industry_risk_score?: number;
   tags?: string[];
   tag_keys?: string[];
 };
@@ -36,18 +40,30 @@ type Row = {
 };
 type Signal = { type: "底背离" | "顶背离"; date: string; index: number };
 type Industry = {
-  code: string;
   name: string;
+  date: string;
   index: number;
-  change: number;
+  avg_change_pct: number;
+  return_20d: number;
   amount: number;
-  amplitude: number;
-  turnover: number;
-  up: number;
-  down: number;
-  flat: number;
-  direction: string;
-  streakDays: number;
+  amount_ratio: number;
+  above_ma20_pct: number;
+  limit_up_count: number;
+  up_count: number;
+  down_count: number;
+  rotation_score: number;
+  phase: string;
+  phase_days: number;
+  risk_score: number;
+  risk_level: string;
+  risk_reasons: string[];
+  history: {date:string;index:number;score:number;phase:string;risk:number;riskLevel:string;breadth:number}[];
+};
+type IndustryLeader = {
+  stock_code:string; name:string; industry_name:string; strategy_role:string;
+  source_mentions:string[]; correlation_90d:number; direction_match_pct:number;
+  amplitude_ratio:number; lead_lag_days:number; lead_lag_correlation:number;
+  turning_signal:string; turning_date?:string; turning_reasons:string[];
 };
 const fallback: Stock[] = [
   {
@@ -319,6 +335,8 @@ export default function Home() {
     [selected, setSelected] = useState<Stock>(fallback[0]),
     [raw, setRaw] = useState<Row[]>([]),
     [industries, setIndustries] = useState<Industry[]>([]),
+    [industryLeaders,setIndustryLeaders]=useState<IndustryLeader[]>([]),
+    [selectedIndustry, setSelectedIndustry] = useState(""),
     [query, setQuery] = useState(""),
     [sort,setSort]=useState<"default"|"desc"|"asc">("default"),
     [market, setMarket] = useState("全部A股"),
@@ -383,15 +401,19 @@ export default function Home() {
   useEffect(() => {
     fetch(`${API_BASE}/api/industries`)
       .then((r) => r.json())
-      .then((d) =>
-        setIndustries(
-          (d.industries || []).sort(
-            (a: Industry, b: Industry) => b.amplitude - a.amplitude,
-          ),
-        ),
-      )
+      .then((d) => setIndustries((d.industries || []).sort(
+        (a: Industry, b: Industry) => b.rotation_score - a.rotation_score,
+      )))
       .catch(() => {});
   }, []);
+  useEffect(()=>{
+    if(selected.industry_name && industries.some(x=>x.name===selected.industry_name)){
+      setSelectedIndustry(selected.industry_name);
+    } else if(!selectedIndustry && industries.length) {
+      setSelectedIndustry(industries[0].name);
+    }
+  },[selected.industry_name,industries,selectedIndustry]);
+  useEffect(()=>{fetch(`${API_BASE}/api/industry-leaders`).then(r=>r.json()).then(d=>setIndustryLeaders(d.leaders||[])).catch(()=>setIndustryLeaders([]))},[]);
   useEffect(()=>{fetch(`${API_BASE}/api/tags`).then(r=>r.json()).then(d=>setAvailableTags(d.tags||[])).catch(()=>setAvailableTags([]))},[]);
   useEffect(()=>{if(!query.trim()){setSearchResults([]);setSearching(false);return}setSearching(true);const timer=setTimeout(()=>{const params=new URLSearchParams({q:query.trim(),sort});if(selectedTags.length)params.set("tags",selectedTags.join(","));fetch(`${API_BASE}/api/search?${params}`).then(r=>r.json()).then(d=>setSearchResults(d.stocks||[])).catch(()=>setSearchResults([])).finally(()=>setSearching(false))},250);return()=>clearTimeout(timer)},[query,sort,selectedTags]);
   const { rows, signals } = useMemo(() => analyze(raw), [raw]),
@@ -546,6 +568,11 @@ export default function Home() {
               <h1>
                 {selected.name} <small>{selected.code}</small>
               </h1>
+              {selected.industry_name&&<div className="industry-tags">
+                <span>{selected.industry_name}</span>
+                {selected.industry_phase&&<span>{selected.industry_phase}</span>}
+                {selected.industry_risk&&<span className={`risk-${selected.industry_risk}`}>轮动风险 {selected.industry_risk} · {selected.industry_risk_score?.toFixed(0)}</span>}
+              </div>}
               {!!selected.tags?.length&&<div className="selected-tags">{selected.tags.map((tag,index)=><span key={`${tag}-${index}`}>{tag}</span>)}</div>}
             </div>
             <div className="quote">
@@ -655,8 +682,23 @@ export default function Home() {
             </div>
           </div>
           <div className="industry-panel">
-            <div className="section-title"><h2>行业股价波动</h2><span>按当日振幅排序 · {industries.length} 个行业</span></div>
-            <div className="industry-grid">{industries.slice(0,18).map((x)=><div className="industry-item" key={x.code}><div><b>{x.name}</b><em className={x.change<0?"trend-down":"trend-up"}>{x.change>0?"+":""}{x.change.toFixed(2)}%</em></div><p><span>振幅 <strong>{x.amplitude.toFixed(2)}%</strong></span><span>成交额 {money(x.amount)}</span></p><div className="breadth"><i style={{width:`${x.up/Math.max(1,x.up+x.down)*100}%`}}/></div><small>上涨 {x.up} · 下跌 {x.down} · 换手 {x.turnover.toFixed(2)}%</small><strong className={x.direction==="跌"?"trend-down":"trend-up"}>容错连续{x.direction} {x.streakDays||"—"} 天</strong></div>)}</div>
+            <div className="section-title"><h2>90日行业轮动与风险</h2><span>按轮动强度排序 · {industries.length} 个行业</span></div>
+            <div className="industry-grid">{industries.slice(0,18).map((x)=><button className={`industry-item ${selectedIndustry===x.name?"active":""}`} onClick={()=>setSelectedIndustry(x.name)} key={x.name}><div><b>{x.name}</b><em className={x.avg_change_pct<0?"trend-down":"trend-up"}>{x.avg_change_pct>0?"+":""}{x.avg_change_pct.toFixed(2)}%</em></div><p><span>轮动强度 <strong>{x.rotation_score.toFixed(0)}</strong></span><span>20日 {x.return_20d>0?"+":""}{x.return_20d.toFixed(1)}%</span></p><div className="breadth"><i style={{width:`${x.above_ma20_pct}%`}}/></div><small>MA20上方 {x.above_ma20_pct.toFixed(0)}% · 涨{x.up_count} 跌{x.down_count}</small><strong className={x.phase==="下跌"||x.phase==="退潮"?"trend-down":"trend-up"}>{x.phase}第 {x.phase_days} 天</strong><span className={`risk-pill risk-${x.risk_level}`}>轮动风险 {x.risk_level} {x.risk_score.toFixed(0)}</span></button>)}</div>
+            {industries.filter(x=>x.name===selectedIndustry).map(x=><div className="industry-detail" key={x.name}>
+              <div><b>{x.name} · 近90个交易日节奏</b><span>行业指数</span></div>
+              <svg viewBox="0 0 900 120" preserveAspectRatio="none" aria-label={`${x.name}近90日行业指数`}>
+                <polyline points={x.history.map((p,i)=>`${i*900/Math.max(1,x.history.length-1)},${110-(p.index-Math.min(...x.history.map(v=>v.index)))*95/Math.max(.01,Math.max(...x.history.map(v=>v.index))-Math.min(...x.history.map(v=>v.index)))}`).join(" ")} />
+              </svg>
+              <div className="risk-reasons"><b>接下来一段时间风险：{x.risk_level}</b><span>{x.risk_reasons.join("；")}</span><small>这是基于价格、量能、市场广度与周期位置的概率提示，不构成确定预测。</small></div>
+              {!!industryLeaders.filter(v=>v.industry_name===x.name).length&&<div className="leader-analysis">
+                <h3>PDF策略提及的行业核心股</h3>
+                {industryLeaders.filter(v=>v.industry_name===x.name).map(v=><button key={v.stock_code} onClick={()=>setSelected(stocks.find(s=>s.code===v.stock_code)||{code:v.stock_code,name:v.name,market:"",price:0,change:0,volume:0,amount:0,industry_name:v.industry_name})}>
+                  <div><b>{v.name}</b><small>{v.stock_code} · {v.strategy_role}</small><strong className={v.turning_signal.includes("转弱")||v.turning_signal.includes("偏弱")?"trend-down":"trend-up"}>{v.turning_signal}</strong></div>
+                  <p><span>同向率 {v.direction_match_pct.toFixed(0)}%</span><span>相关性 {v.correlation_90d.toFixed(2)}</span><span>涨跌弹性 {v.amplitude_ratio.toFixed(1)}倍</span><span>{v.lead_lag_days>0?`约领先行业 ${v.lead_lag_days} 日`:v.lead_lag_days<0?`约滞后行业 ${-v.lead_lag_days} 日`:"与行业同步"}</span></p>
+                  <em>{v.turning_reasons.join("；")}</em>
+                </button>)}
+              </div>}
+            </div>)}
           </div>
           <div className="lower">
             <div className="signal-log">

@@ -33,3 +33,42 @@ CREATE TABLE IF NOT EXISTS stock_tags (
 CREATE INDEX IF NOT EXISTS stock_tags_key_idx ON stock_tags (tag_key, stock_code);
 CREATE INDEX IF NOT EXISTS stock_tags_name_idx ON stock_tags (tag_name);
 CREATE INDEX IF NOT EXISTS stock_tags_stock_idx ON stock_tags (stock_code);
+CREATE TABLE IF NOT EXISTS industry_daily_metrics (
+  industry_name text NOT NULL,
+  trade_date date NOT NULL,
+  member_count integer NOT NULL,
+  avg_change_pct numeric(10,4) NOT NULL,
+  industry_index numeric(16,4) NOT NULL,
+  return_20d numeric(10,4) NOT NULL,
+  amount numeric(24,2) NOT NULL,
+  amount_ratio numeric(10,4) NOT NULL,
+  above_ma20_pct numeric(10,4) NOT NULL,
+  limit_up_count integer NOT NULL,
+  up_count integer NOT NULL,
+  down_count integer NOT NULL,
+  rotation_score numeric(10,4) NOT NULL,
+  phase varchar(16) NOT NULL,
+  phase_days integer NOT NULL,
+  risk_score numeric(10,4) NOT NULL,
+  risk_level varchar(8) NOT NULL,
+  risk_reasons text[] NOT NULL DEFAULT ARRAY[]::text[],
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (industry_name, trade_date)
+);
+CREATE INDEX IF NOT EXISTS industry_metrics_date_idx
+  ON industry_daily_metrics (trade_date DESC, rotation_score DESC);
+CREATE TABLE IF NOT EXISTS industry_leader_analysis (
+  stock_code text PRIMARY KEY REFERENCES stocks(code) ON DELETE CASCADE,
+  industry_name text NOT NULL,
+  strategy_role text NOT NULL,
+  source_mentions jsonb NOT NULL DEFAULT '[]',
+  correlation_90d double precision,
+  direction_match_pct double precision,
+  amplitude_ratio double precision,
+  lead_lag_days integer,
+  lead_lag_correlation double precision,
+  turning_signal text,
+  turning_date date,
+  turning_reasons jsonb NOT NULL DEFAULT '[]',
+  calculated_at timestamptz NOT NULL DEFAULT now()
+);
