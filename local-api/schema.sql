@@ -18,3 +18,18 @@ CREATE TABLE IF NOT EXISTS sync_runs (
   id bigserial PRIMARY KEY, sync_type varchar(32) NOT NULL, trade_date date, status varchar(16) NOT NULL,
   rows_written integer NOT NULL DEFAULT 0, started_at timestamptz NOT NULL DEFAULT now(), finished_at timestamptz, error text
 );
+CREATE TABLE IF NOT EXISTS stock_tags (
+  stock_code char(6) NOT NULL REFERENCES stocks(code) ON DELETE CASCADE,
+  tag_key varchar(48) NOT NULL,
+  tag_name varchar(48) NOT NULL,
+  category varchar(24) NOT NULL,
+  direction varchar(8) NOT NULL DEFAULT 'neutral',
+  value numeric(16,4),
+  as_of date,
+  source varchar(16) NOT NULL DEFAULT 'system',
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (stock_code, tag_key)
+);
+CREATE INDEX IF NOT EXISTS stock_tags_key_idx ON stock_tags (tag_key, stock_code);
+CREATE INDEX IF NOT EXISTS stock_tags_name_idx ON stock_tags (tag_name);
+CREATE INDEX IF NOT EXISTS stock_tags_stock_idx ON stock_tags (stock_code);

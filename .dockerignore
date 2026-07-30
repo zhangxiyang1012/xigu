@@ -1,0 +1,16 @@
+node_modules
+.next
+.vinext
+dist
+.wrangler
+.git
+.DS_Store
+coverage
+outputs
+work
+*.log
+.env
+.env.*
+!.env.example
+local-api/__pycache__
+**/*.pyc

@@ -15,6 +15,11 @@ services:
       retries: 20
   api:
     build: ./local-api
+    extra_hosts:
+      # Docker Desktop 当前将东方财富域名解析到不可用节点；
+      # 固定到已验证可用的官方 IPv4 节点。
+      - "push2.eastmoney.com:61.129.129.196"
+      - "push2his.eastmoney.com:120.79.123.125"
     environment:
       DATABASE_URL: postgresql://xigu:${POSTGRES_PASSWORD:-xigu_local_change_me}@postgres:5432/xigu
       CORS_ORIGINS: http://localhost:3000

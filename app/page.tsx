@@ -9,6 +9,15 @@ type Stock = {
   change: number;
   volume: number;
   amount: number;
+  tags?: string[];
+  tag_keys?: string[];
+};
+type Tag = {
+  key: string;
+  name: string;
+  category: string;
+  direction: "up" | "down" | "neutral";
+  stock_count: number;
 };
 type Row = {
   date: string;
@@ -305,6 +314,8 @@ export default function Home() {
   const [stocks, setStocks] = useState<Stock[]>(fallback),
     [searchResults,setSearchResults]=useState<Stock[]>([]),
     [searching,setSearching]=useState(false),
+    [availableTags,setAvailableTags]=useState<Tag[]>([]),
+    [selectedTags,setSelectedTags]=useState<string[]>([]),
     [selected, setSelected] = useState<Stock>(fallback[0]),
     [raw, setRaw] = useState<Row[]>([]),
     [industries, setIndustries] = useState<Industry[]>([]),
@@ -323,7 +334,9 @@ export default function Home() {
     [total, setTotal] = useState(0);
   useEffect(() => {
     setLoading(true);
-    fetch(`${API_BASE}/api/stocks?page=${page}`)
+    const params=new URLSearchParams({page:String(page),sort});
+    if(selectedTags.length)params.set("tags",selectedTags.join(","));
+    fetch(`${API_BASE}/api/stocks?${params}`)
       .then((r) => r.json())
       .then((d) => {
         if (!d.stocks?.length) throw Error();
@@ -339,7 +352,7 @@ export default function Home() {
         setError("免费行情源暂时不可用");
         setLoading(false);
       });
-  }, [page]);
+  }, [page,sort,selectedTags]);
   useEffect(() => {
     const controller = new AbortController();
     setRaw([]);
@@ -379,7 +392,8 @@ export default function Home() {
       )
       .catch(() => {});
   }, []);
-  useEffect(()=>{if(!query.trim()){setSearchResults([]);setSearching(false);return}setSearching(true);const timer=setTimeout(()=>{fetch(`${API_BASE}/api/search?q=${encodeURIComponent(query.trim())}`).then(r=>r.json()).then(d=>setSearchResults(d.stocks||[])).catch(()=>setSearchResults([])).finally(()=>setSearching(false))},250);return()=>clearTimeout(timer)},[query]);
+  useEffect(()=>{fetch(`${API_BASE}/api/tags`).then(r=>r.json()).then(d=>setAvailableTags(d.tags||[])).catch(()=>setAvailableTags([]))},[]);
+  useEffect(()=>{if(!query.trim()){setSearchResults([]);setSearching(false);return}setSearching(true);const timer=setTimeout(()=>{const params=new URLSearchParams({q:query.trim(),sort});if(selectedTags.length)params.set("tags",selectedTags.join(","));fetch(`${API_BASE}/api/search?${params}`).then(r=>r.json()).then(d=>setSearchResults(d.stocks||[])).catch(()=>setSearchResults([])).finally(()=>setSearching(false))},250);return()=>clearTimeout(timer)},[query,sort,selectedTags]);
   const { rows, signals } = useMemo(() => analyze(raw), [raw]),
     recent = rows.at(-1),
     last20 = rows.slice(-20),
@@ -398,10 +412,8 @@ export default function Home() {
     bottom = signals.filter((s) => s.type === "底背离"),
     top = signals.filter((s) => s.type === "顶背离"),
     filtered = (query.trim()?searchResults:stocks).filter(
-      (s) =>
-        (market === "全部A股" || s.market === market) &&
-        (!query.trim() || s.name.includes(query) || s.code.includes(query)),
-    ).sort((a,b)=>sort==="desc"?b.change-a.change:sort==="asc"?a.change-b.change:0),
+      (s) => market === "全部A股" || s.market === market,
+    ),
     pageCount = Math.max(1, Math.ceil(total / 100)),
     stockTrend = trendStreak(rows.map((r) => r.close));
   return (
@@ -448,9 +460,22 @@ export default function Home() {
             <input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="搜索全部A股名称 / 代码"
+              placeholder="搜索名称 / 代码 / 标签"
             />
           </label>
+          <div className="tag-filter" aria-label="股票标签筛选">
+            {availableTags.slice(0,12).map(tag=>(
+              <button
+                key={tag.key}
+                className={`${selectedTags.includes(tag.key)?"active ":""}tag-${tag.direction}`}
+                onClick={()=>{setPage(1);setSelectedTags(current=>current.includes(tag.key)?current.filter(key=>key!==tag.key):[...current,tag.key])}}
+                title={`${tag.name} · ${tag.stock_count}只`}
+              >
+                {tag.name}<small>{tag.stock_count}</small>
+              </button>
+            ))}
+            {!!selectedTags.length&&<button className="tag-clear" onClick={()=>{setSelectedTags([]);setPage(1)}}>清除</button>}
+          </div>
           <div className="tabs">
             {["全部A股", "沪市", "深市", "创业板", "科创板"].map((m) => (
               <button
@@ -489,6 +514,7 @@ export default function Home() {
                   </em>
                 </div>
                 <span className="signal">{s.market}</span>
+                {!!s.tags?.length&&<div className="stock-tags">{s.tags.slice(0,3).map((tag,index)=><i key={`${tag}-${index}`} className={tag.includes("跌")||tag.includes("空头")||tag.includes("新低")?"down":tag.includes("涨")||tag.includes("多头")||tag.includes("新高")?"up":""}>{tag}</i>)}</div>}
               </button>
             ))}
             {error && <p className="empty">{error}</p>}
@@ -520,6 +546,7 @@ export default function Home() {
               <h1>
                 {selected.name} <small>{selected.code}</small>
               </h1>
+              {!!selected.tags?.length&&<div className="selected-tags">{selected.tags.map((tag,index)=><span key={`${tag}-${index}`}>{tag}</span>)}</div>}
             </div>
             <div className="quote">
               <b className={(recent?.change ?? selected.change) < 0 ? "trend-down" : "trend-up"}>{recent?.close?.toFixed(2) || selected.price || "载入中"}</b>
