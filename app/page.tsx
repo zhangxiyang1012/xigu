@@ -326,6 +326,113 @@ function Chart({
     </div>
   );
 }
+
+function IndustryRotationMap({
+  industries,
+  selected,
+  onSelect,
+}: {
+  industries: Industry[];
+  selected: string;
+  onSelect: (name: string) => void;
+}) {
+  const leaders = industries
+    .filter((item) => item.history?.length)
+    .sort((a, b) => {
+      const avg = (item: Industry) =>
+        item.history.slice(-20).reduce((sum, point) => sum + point.score, 0) /
+        Math.max(1, item.history.slice(-20).length);
+      return avg(b) - avg(a);
+    })
+    .slice(0, 15);
+  const dates = Array.from(
+    new Set(leaders.flatMap((item) => item.history.map((point) => point.date))),
+  )
+    .sort()
+    .slice(-90);
+  const color = (score: number, risk: number) => {
+    if (risk >= 65) return "#7f3430";
+    if (score >= 80) return "#df5149";
+    if (score >= 65) return "#ed8179";
+    if (score >= 50) return "#efd2ce";
+    if (score >= 35) return "#d9e5df";
+    if (score >= 20) return "#8fc5ae";
+    return "#3f9273";
+  };
+  if (!leaders.length || !dates.length)
+    return <div className="rotation-empty">行业历史序列正在生成…</div>;
+  return (
+    <div className="rotation-map">
+      <div className="rotation-map-head">
+        <div>
+          <b>过去90个交易日行业轮动图</b>
+          <span>每格代表一个交易日，越红表示轮动越强，深色边框表示高风险</span>
+        </div>
+        <div className="rotation-legend">
+          <span><i className="weak" />弱势</span>
+          <span><i className="neutral" />中性</span>
+          <span><i className="strong" />强势</span>
+          <span><i className="danger" />高风险</span>
+        </div>
+      </div>
+      <div className="rotation-scroll">
+        <div
+          className="rotation-table"
+          style={{ gridTemplateColumns: `106px repeat(${dates.length}, 10px)` }}
+        >
+          <div className="rotation-corner">行业 / 日期</div>
+          {dates.map((date, index) => (
+            <span
+              className="rotation-date"
+              key={date}
+              title={date}
+            >
+              {index % 15 === 0 ? date.slice(5) : ""}
+            </span>
+          ))}
+          {leaders.map((item) => {
+            const points = new Map(item.history.map((point) => [point.date, point]));
+            return [
+              <button
+                className={`rotation-name ${selected === item.name ? "active" : ""}`}
+                key={`${item.name}-name`}
+                onClick={() => onSelect(item.name)}
+              >
+                {item.name}
+              </button>,
+              ...dates.map((date) => {
+                const point = points.get(date);
+                return (
+                  <button
+                    className={`rotation-cell ${selected === item.name ? "active" : ""}`}
+                    key={`${item.name}-${date}`}
+                    style={{
+                      background: point ? color(point.score, point.risk) : "#f1f1ee",
+                      outline: point?.risk >= 65 ? "1px solid #6f241f" : "none",
+                    }}
+                    title={
+                      point
+                        ? `${item.name} ${date}\n轮动强度 ${point.score.toFixed(0)} · ${point.phase}\n风险 ${point.riskLevel} ${point.risk.toFixed(0)} · MA20上方 ${point.breadth.toFixed(0)}%`
+                        : `${item.name} ${date} 暂无数据`
+                    }
+                    onClick={() => onSelect(item.name)}
+                    aria-label={`${item.name} ${date}`}
+                  />
+                );
+              }),
+            ];
+          })}
+        </div>
+      </div>
+      <div className="rotation-axis">
+        <span>{dates[0]}</span>
+        <span>← 行业强弱随时间迁移 →</span>
+        <span>{dates.at(-1)}</span>
+      </div>
+    </div>
+  );
+}
+
 export default function Home() {
   const [stocks, setStocks] = useState<Stock[]>(fallback),
     [searchResults,setSearchResults]=useState<Stock[]>([]),
@@ -683,6 +790,8 @@ export default function Home() {
           </div>
           <div className="industry-panel">
             <div className="section-title"><h2>90日行业轮动与风险</h2><span>按轮动强度排序 · {industries.length} 个行业</span></div>
+            <IndustryRotationMap industries={industries} selected={selectedIndustry} onSelect={setSelectedIndustry} />
+            <div className="industry-subtitle"><b>最新交易日行业状态</b><span>点击行业查看90日指数与核心股联动</span></div>
             <div className="industry-grid">{industries.slice(0,18).map((x)=><button className={`industry-item ${selectedIndustry===x.name?"active":""}`} onClick={()=>setSelectedIndustry(x.name)} key={x.name}><div><b>{x.name}</b><em className={x.avg_change_pct<0?"trend-down":"trend-up"}>{x.avg_change_pct>0?"+":""}{x.avg_change_pct.toFixed(2)}%</em></div><p><span>轮动强度 <strong>{x.rotation_score.toFixed(0)}</strong></span><span>20日 {x.return_20d>0?"+":""}{x.return_20d.toFixed(1)}%</span></p><div className="breadth"><i style={{width:`${x.above_ma20_pct}%`}}/></div><small>MA20上方 {x.above_ma20_pct.toFixed(0)}% · 涨{x.up_count} 跌{x.down_count}</small><strong className={x.phase==="下跌"||x.phase==="退潮"?"trend-down":"trend-up"}>{x.phase}第 {x.phase_days} 天</strong><span className={`risk-pill risk-${x.risk_level}`}>轮动风险 {x.risk_level} {x.risk_score.toFixed(0)}</span></button>)}</div>
             {industries.filter(x=>x.name===selectedIndustry).map(x=><div className="industry-detail" key={x.name}>
               <div><b>{x.name} · 近90个交易日节奏</b><span>行业指数</span></div>
