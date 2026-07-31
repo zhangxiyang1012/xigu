@@ -624,8 +624,8 @@ export default function Home() {
           </div>
         </div>
         <nav>
-          <button className={activeView==="market"?"nav-active":""} onClick={()=>setActiveView("market")}>行情分析</button>
-          <button className={activeView==="industry"?"nav-active":""} onClick={()=>setActiveView("industry")}>行业轮动</button>
+          <button className={activeView==="market"?"nav-active":""} onClick={()=>setActiveView("market")}>个股分析</button>
+          <button className={activeView==="industry"?"nav-active":""} onClick={()=>setActiveView("industry")}>行业分析</button>
           <button>信号雷达</button>
           <button>自选组合</button>
         </nav>
