@@ -27,6 +27,64 @@ def tolerant_streak(rows: list[asyncpg.Record]) -> tuple[str, int]:
     return best
 
 
+def strict_streak(rows: list[asyncpg.Record]) -> tuple[str, int]:
+    if not rows:
+        return "平", 0
+    latest_change = float(rows[-1]["change_pct"])
+    direction = "上涨" if latest_change > 0 else "下跌" if latest_change < 0 else "平"
+    days = 0
+    for row in reversed(rows):
+        change = float(row["change_pct"])
+        if ((direction == "上涨" and change > 0)
+                or (direction == "下跌" and change < 0)):
+            days += 1
+        else:
+            break
+    return direction, days
+
+
+def tolerant_trend_label(rows: list[asyncpg.Record]) -> tuple[str, int, str]:
+    direction, days = tolerant_streak(rows)
+    if not rows:
+        return direction, days, ""
+    current_direction, current_days = strict_streak(rows)
+    segment_start = len(rows) - current_days
+    first_change = float(rows[segment_start]["change_pct"])
+    limit_direction = "涨停" if first_change > 9.8 else "跌停" if first_change < -9.8 else ""
+    if limit_direction:
+        limit_days = 0
+        for row in rows[segment_start:]:
+            change = float(row["change_pct"])
+            if ((limit_direction == "涨停" and change > 9.8)
+                    or (limit_direction == "跌停" and change < -9.8)):
+                limit_days += 1
+            else:
+                break
+        previous_direction, previous_days = strict_streak(rows[:segment_start])
+        reversed_trend = (
+            (limit_direction == "跌停" and previous_direction == "上涨")
+            or (limit_direction == "涨停" and previous_direction == "下跌")
+        )
+        if reversed_trend and previous_days >= 2:
+            continuation = (
+                f"，转{'跌' if limit_direction == '跌停' else '涨'}"
+                f"第{current_days}天"
+                if current_days > limit_days else ""
+            )
+            return (
+                previous_direction,
+                current_days,
+                f"容错连{'涨' if previous_direction == '上涨' else '跌'}"
+                f"{previous_days}天，{limit_direction}第{limit_days}天"
+                f"{continuation}",
+            )
+    return (
+        direction,
+        days,
+        f"容错连{'涨' if direction == '上涨' else '跌'}{days}天",
+    )
+
+
 def build_tags(rows: list[asyncpg.Record]) -> list[tuple]:
     if not rows:
         return [("no_history", "暂无行情", "数据", "neutral", None)]
@@ -80,21 +138,50 @@ def build_tags(rows: list[asyncpg.Record]) -> list[tuple]:
         tags.append(("high_volatility", "高波动", "波动", "neutral", volatility))
     elif volatility <= 18:
         tags.append(("low_volatility", "低波动", "波动", "neutral", volatility))
-    if change >= 9.8:
+    if change > 9.8:
         tags.append(("limit_up", "当日涨停", "行情", "up", change))
-    elif change <= -9.8:
+    elif change < -9.8:
         tags.append(("limit_down", "当日跌停", "行情", "down", change))
 
-    direction, days = tolerant_streak(rows)
+    direction, days, trend_label = tolerant_trend_label(rows)
     if days >= 2:
         tags.append(
             ("tolerant_rise" if direction == "上涨" else "tolerant_fall",
-             f"容错连涨{days}天" if direction == "上涨" else f"容错连跌{days}天",
+             trend_label,
              "趋势", "up" if direction == "上涨" else "down", days)
         )
     if not tags:
         tags.append(("sideways", "震荡整理", "趋势", "neutral", None))
     return tags
+
+
+async def refresh_one(connection: asyncpg.Connection, code: str) -> int:
+    rows = await connection.fetch(
+        """
+        SELECT trade_date,close,change_pct,volume
+        FROM daily_quotes WHERE stock_code=$1
+        ORDER BY trade_date DESC LIMIT 60
+        """,
+        code,
+    )
+    history = list(reversed(rows))
+    as_of = history[-1]["trade_date"] if history else None
+    values = [
+        (code, key, name, category, direction, value, as_of)
+        for key, name, category, direction, value in build_tags(history)
+    ]
+    await connection.execute(
+        "DELETE FROM stock_tags WHERE stock_code=$1 AND source='system'", code
+    )
+    await connection.executemany(
+        """
+        INSERT INTO stock_tags(
+          stock_code,tag_key,tag_name,category,direction,value,as_of,source
+        ) VALUES($1,$2,$3,$4,$5,$6,$7,'system')
+        """,
+        values,
+    )
+    return len(values)
 
 
 async def refresh(connection: asyncpg.Connection) -> tuple[int, int]:

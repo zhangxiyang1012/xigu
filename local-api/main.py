@@ -1,5 +1,6 @@
 import asyncio
 import os
+import re
 from contextlib import asynccontextmanager
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
@@ -10,9 +11,10 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from pypinyin import Style, lazy_pinyin
 from refresh_industries import refresh as refresh_industry_metrics
 from refresh_leaders import refresh as refresh_leader_metrics
-from refresh_tags import refresh as refresh_stock_tags
+from refresh_tags import refresh as refresh_stock_tags, refresh_one as refresh_one_stock_tags
 
 DB = os.environ["DATABASE_URL"]
 pool: asyncpg.Pool
@@ -37,6 +39,13 @@ def number(value, default=0.0) -> float:
         return default
 
 
+def search_keys(name: str) -> tuple[str, str]:
+    full = "".join(lazy_pinyin(name)).lower()
+    initials = "".join(lazy_pinyin(name, style=Style.FIRST_LETTER)).lower()
+    clean = lambda value: re.sub(r"[^a-z0-9]", "", value)
+    return clean(full), clean(initials)
+
+
 async def init_db():
     global pool
     pool = await asyncpg.create_pool(DB, min_size=2, max_size=12)
@@ -44,6 +53,16 @@ async def init_db():
         sql = open("schema.sql").read()
         for statement in (s.strip() for s in sql.split(";") if s.strip()):
             await connection.execute(statement)
+        missing = await connection.fetch(
+            """SELECT code,name FROM stocks
+               WHERE name_pinyin IS NULL OR name_initials IS NULL"""
+        )
+        if missing:
+            await connection.executemany(
+                """UPDATE stocks SET name_pinyin=$2,name_initials=$3
+                   WHERE code=$1""",
+                [(row["code"], *search_keys(row["name"])) for row in missing],
+            )
 
 
 async def persist_snapshot(items: list[dict]):
@@ -57,10 +76,14 @@ async def persist_snapshot(items: list[dict]):
     async with pool.acquire() as connection, connection.transaction():
         await connection.executemany(
             """
-            INSERT INTO stocks(code,name,market,industry_name,updated_at)
-            VALUES($1,$2,$3,$4,now())
+            INSERT INTO stocks(
+              code,name,market,industry_name,name_pinyin,name_initials,updated_at
+            )
+            VALUES($1,$2,$3,$4,$5,$6,now())
             ON CONFLICT(code) DO UPDATE SET
               name=excluded.name,market=excluded.market,
+              name_pinyin=excluded.name_pinyin,
+              name_initials=excluded.name_initials,
               industry_name=CASE WHEN stocks.industry_source='sw2021'
                 THEN stocks.industry_name
                 ELSE coalesce(nullif(excluded.industry_name,''),stocks.industry_name) END,
@@ -72,6 +95,7 @@ async def persist_snapshot(items: list[dict]):
                     str(item.get("f14") or item["f12"]),
                     market(str(item["f12"])),
                     str(item.get("f100") or ""),
+                    *search_keys(str(item.get("f14") or item["f12"])),
                 )
                 for item in valid
             ],
@@ -321,6 +345,7 @@ async def stocks(
 async def search(q: str, tags: str = "", sort: str = "desc"):
     selected_tags = [tag for tag in tags.split(",") if tag]
     order = "change ASC,s.code" if sort == "asc" else "change DESC,s.code"
+    pinyin_query = re.sub(r"[^a-z0-9]", "", q.lower())
     async with pool.acquire() as connection:
         rows = await connection.fetch(
             f"""
@@ -348,7 +373,11 @@ async def search(q: str, tags: str = "", sort: str = "desc"):
               ORDER BY trade_date DESC LIMIT 1
             ) ir ON true
             WHERE (
-              s.code LIKE $1 OR s.name LIKE $1 OR EXISTS (
+              s.code LIKE $1 OR s.name LIKE $1
+              OR ($3 <> '' AND (
+                s.name_pinyin LIKE '%' || $3 || '%'
+                OR s.name_initials LIKE '%' || $3 || '%'
+              )) OR EXISTS (
                 SELECT 1 FROM stock_tags
                 WHERE stock_code=s.code AND tag_name LIKE $1
               )
@@ -362,6 +391,7 @@ async def search(q: str, tags: str = "", sort: str = "desc"):
             """,
             f"%{q}%",
             selected_tags,
+            pinyin_query,
         )
     return {"stocks": [dict(row) for row in rows]}
 
@@ -471,6 +501,7 @@ async def history(code: str):
                 for row in parsed
             ],
         )
+        await refresh_one_stock_tags(connection, code)
     return {"source": "本地PostgreSQL + 腾讯证券", "rows": parsed}
 
 

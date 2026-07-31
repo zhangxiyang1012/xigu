@@ -95,6 +95,40 @@ const money = (n: number) =>
       ? `${(n / 1e4).toFixed(1)}万`
     : String(n || "—");
 function trendStreak(prices:number[]){let best={direction:"平",days:0};for(let n=1;n<Math.min(30,prices.length);n++){const part=prices.slice(-n-1),direction=part.at(-1)!>=part[0]?"上涨":"下跌";let opposite=0;for(let i=1;i<part.length;i++){const d=part[i]-part[i-1];if((direction==="上涨"&&d<0)||(direction==="下跌"&&d>0))opposite++}if(opposite<=1)best={direction,days:n}}return best}
+function strictTrend(rows:Row[]){
+  if(!rows.length)return {direction:"平",days:0};
+  const direction=rows.at(-1)!.change>0?"上涨":rows.at(-1)!.change<0?"下跌":"平";
+  let days=0;
+  for(let index=rows.length-1;index>=0;index--){
+    const change=rows[index].change;
+    if((direction==="上涨"&&change>0)||(direction==="下跌"&&change<0))days++;
+    else break;
+  }
+  return {direction,days};
+}
+function trendStatus(rows:Row[]){
+  const current=trendStreak(rows.map(row=>row.close));
+  if(!rows.length)return {...current,label:"暂无趋势"};
+  const currentStrict=strictTrend(rows);
+  const segmentStart=rows.length-currentStrict.days;
+  const firstChange=rows[segmentStart]?.change??0;
+  const limitDirection=firstChange>9.8?"涨停":firstChange<-9.8?"跌停":"";
+  if(limitDirection){
+    let limitDays=0;
+    for(let index=segmentStart;index<rows.length;index++){
+      const change=rows[index].change;
+      if((limitDirection==="涨停"&&change>9.8)||(limitDirection==="跌停"&&change<-9.8))limitDays++;
+      else break;
+    }
+    const previous=strictTrend(rows.slice(0,segmentStart));
+    const reversed=(limitDirection==="跌停"&&previous.direction==="上涨")||(limitDirection==="涨停"&&previous.direction==="下跌");
+    if(reversed&&previous.days>=2){
+      const continuation=currentStrict.days>limitDays?`，转${limitDirection==="跌停"?"跌":"涨"}第${currentStrict.days}天`:"";
+      return {direction:limitDirection==="跌停"?"下跌":"上涨",days:currentStrict.days,label:`容错连${previous.direction==="上涨"?"涨":"跌"}${previous.days}天，${limitDirection}第${limitDays}天${continuation}`};
+    }
+  }
+  return {...current,label:`容错连${current.direction==="下跌"?"跌":"涨"}第 ${current.days} 天`};
+}
 function ema(a: number[], n: number) {
   const k = 2 / (n + 1);
   return a
@@ -612,7 +646,7 @@ export default function Home() {
       (s) => market === "全部A股" || s.market === market,
     ),
     pageCount = Math.max(1, Math.ceil(total / 100)),
-    stockTrend = trendStreak(rows.map((r) => r.close));
+    stockTrend = trendStatus(rows);
   return (
     <main>
       <header>
@@ -806,7 +840,7 @@ export default function Home() {
             </div>
             <div>
               <span>个股连续趋势</span>
-              <b className={stockTrend.direction === "下跌" ? "trend-down" : "trend-up"}>容错连{stockTrend.direction === "下跌" ? "跌" : "涨"}第 {stockTrend.days} 天</b>
+              <b className={stockTrend.direction === "下跌" ? "trend-down" : "trend-up"}>{stockTrend.label}</b>
               <small>期间允许1个反向交易日</small>
             </div>
           </div>
