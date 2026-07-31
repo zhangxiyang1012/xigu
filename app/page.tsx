@@ -598,9 +598,13 @@ export default function Home() {
         last20.reduce((s, r) => s + (r.volume - avgVol) ** 2, 0) /
           Math.max(1, last20.length),
       ) / Math.max(1, avgVol),
-    firstLimit =
-      rows.find((r, i) => i > 0 && r.close / rows[i - 1].close >= 1.098)
-        ?.date || "未检出",
+    latestLimit = rows.reduce(
+      (latest, row, index) =>
+        index > 0 && row.close / rows[index - 1].close >= 1.098
+          ? row.date
+          : latest,
+      "未检出",
+    ),
     bottom = signals.filter((s) => s.type === "底背离"),
     top = signals.filter((s) => s.type === "顶背离"),
     filtered = (query.trim()?searchResults:stocks).filter(
@@ -788,8 +792,8 @@ export default function Home() {
               <small>最近：{top.at(-1)?.date || "无"}</small>
             </div>
             <div>
-              <span>首次涨停</span>
-              <b>{firstLimit}</b>
+              <span>最近一次涨停</span>
+              <b>{latestLimit}</b>
               <small>按前复权日涨幅≥9.8%估算</small>
             </div>
             <div>
