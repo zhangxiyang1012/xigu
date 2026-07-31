@@ -534,6 +534,26 @@ export default function Home() {
       .then((d) => {
         if (!d.rows?.length) throw Error("暂无历史行情");
         setRaw(d.rows);
+        const latest = d.rows.at(-1) as Row;
+        const latestQuote = {
+          price: latest.close,
+          change: latest.change,
+          volume: latest.volume,
+          amount: latest.amount,
+        };
+        setSelected((current) =>
+          current.code === selected.code ? { ...current, ...latestQuote } : current,
+        );
+        setStocks((current) =>
+          current.map((stock) =>
+            stock.code === selected.code ? { ...stock, ...latestQuote } : stock,
+          ),
+        );
+        setSearchResults((current) =>
+          current.map((stock) =>
+            stock.code === selected.code ? { ...stock, ...latestQuote } : stock,
+          ),
+        );
       })
       .catch((e) => {
         if (e.name !== "AbortError") {

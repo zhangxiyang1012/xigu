@@ -1,7 +1,8 @@
 import asyncio
 import os
 from contextlib import asynccontextmanager
-from datetime import date
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
 import asyncpg
 import httpx
@@ -46,7 +47,7 @@ async def init_db():
 
 
 async def persist_snapshot(items: list[dict]):
-    today = date.today()
+    shanghai = ZoneInfo("Asia/Shanghai")
     valid = [
         item
         for item in items
@@ -78,7 +79,7 @@ async def persist_snapshot(items: list[dict]):
         quotes = [
             (
                 str(item["f12"]),
-                today,
+                datetime.fromtimestamp(number(item.get("f124")), shanghai).date(),
                 number(item.get("f17"), number(item.get("f2"))),
                 number(item.get("f15"), number(item.get("f2"))),
                 number(item.get("f16"), number(item.get("f2"))),
@@ -89,7 +90,7 @@ async def persist_snapshot(items: list[dict]):
                 number(item.get("f8")),
             )
             for item in valid
-            if number(item.get("f2")) > 0
+            if number(item.get("f2")) > 0 and number(item.get("f124")) > 0
         ]
         if quotes:
             await connection.executemany(
