@@ -484,6 +484,7 @@ export default function Home() {
     [industryLeaders,setIndustryLeaders]=useState<IndustryLeader[]>([]),
     [selectedIndustry, setSelectedIndustry] = useState(""),
     [selectedIndustries, setSelectedIndustries] = useState<string[]>([]),
+    [activeView,setActiveView]=useState<"market"|"industry">("market"),
     [query, setQuery] = useState(""),
     [sort,setSort]=useState<"default"|"desc"|"asc">("default"),
     [market, setMarket] = useState("全部A股"),
@@ -623,7 +624,8 @@ export default function Home() {
           </div>
         </div>
         <nav>
-          <button className="nav-active">行情分析</button>
+          <button className={activeView==="market"?"nav-active":""} onClick={()=>setActiveView("market")}>行情分析</button>
+          <button className={activeView==="industry"?"nav-active":""} onClick={()=>setActiveView("industry")}>行业轮动</button>
           <button>信号雷达</button>
           <button>自选组合</button>
         </nav>
@@ -643,8 +645,8 @@ export default function Home() {
         </div>
         <p>免费接口可能出现延迟或临时不可用，请勿据此直接交易</p>
       </div>
-      <section className="workspace">
-        <aside>
+      <section className={`workspace ${activeView==="industry"?"industry-view":""}`}>
+        {activeView==="market"&&<aside>
           <div className="aside-head">
             <h2>
               股票列表 <span>{total.toLocaleString()}</span>
@@ -732,8 +734,9 @@ export default function Home() {
               ›
             </button>
           </div>}
-        </aside>
+        </aside>}
         <article>
+          {activeView==="market"&&<>
           <div className="stock-title">
             <div>
               <p>
@@ -855,7 +858,8 @@ export default function Home() {
               <span>{recent?.date || "—"}</span>
             </div>
           </div>
-          <div className="industry-panel">
+          </>}
+          {activeView==="industry"&&<div className="industry-panel">
             <div className="section-title"><h2>90日行业轮动与风险</h2><span>按轮动强度排序 · {industries.length} 个行业</span></div>
             <IndustryRotationMap industries={industries} selected={selectedIndustries} onToggle={toggleIndustry} />
             <IndustryRotationCompare industries={industries} selected={selectedIndustries} onAdd={toggleIndustry} onRemove={toggleIndustry} onClear={()=>setSelectedIndustries([])} />
@@ -869,15 +873,15 @@ export default function Home() {
               <div className="risk-reasons"><b>接下来一段时间风险：{x.risk_level}</b><span>{reasonText(x.risk_reasons)}</span><small>这是基于价格、量能、市场广度与周期位置的概率提示，不构成确定预测。</small></div>
               {!!industryLeaders.filter(v=>v.industry_name===x.name).length&&<div className="leader-analysis">
                 <h3>PDF策略提及的行业核心股</h3>
-                {industryLeaders.filter(v=>v.industry_name===x.name).map(v=><button key={v.stock_code} onClick={()=>setSelected(stocks.find(s=>s.code===v.stock_code)||{code:v.stock_code,name:v.name,market:"",price:0,change:0,volume:0,amount:0,industry_name:v.industry_name})}>
+                {industryLeaders.filter(v=>v.industry_name===x.name).map(v=><button key={v.stock_code} onClick={()=>{setSelected(stocks.find(s=>s.code===v.stock_code)||{code:v.stock_code,name:v.name,market:"",price:0,change:0,volume:0,amount:0,industry_name:v.industry_name});setActiveView("market")}}>
                   <div><b>{v.name}</b><small>{v.stock_code} · {v.strategy_role}</small><strong className={v.turning_signal.includes("转弱")||v.turning_signal.includes("偏弱")?"trend-down":"trend-up"}>{v.turning_signal}</strong></div>
                   <p><span>同向率 {v.direction_match_pct.toFixed(0)}%</span><span>相关性 {v.correlation_90d.toFixed(2)}</span><span>涨跌弹性 {v.amplitude_ratio.toFixed(1)}倍</span><span>{v.lead_lag_days>0?`约领先行业 ${v.lead_lag_days} 日`:v.lead_lag_days<0?`约滞后行业 ${-v.lead_lag_days} 日`:"与行业同步"}</span></p>
                   <em>{reasonText(v.turning_reasons)}</em>
                 </button>)}
               </div>}
             </div>)}
-          </div>
-          <div className="lower">
+          </div>}
+          {activeView==="market"&&<div className="lower">
             <div className="signal-log">
               <div className="section-title">
                 <h2>最近背离信号</h2>
@@ -930,7 +934,7 @@ export default function Home() {
                 </p>
               </div>
             </div>
-          </div>
+          </div>}
         </article>
       </section>
       <footer>

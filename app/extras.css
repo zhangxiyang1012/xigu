@@ -4,6 +4,9 @@
 .chart-tooltip{position:absolute;z-index:5;left:48px;width:238px;padding:10px 12px;background:rgba(31,40,35,.94);color:#fff;border-radius:6px;box-shadow:0 5px 20px #0003;pointer-events:none;font-size:11px}
 .chart-tooltip.left{left:auto;right:70px}.chart-tooltip>b{display:block;margin-bottom:7px}.chart-tooltip>div{display:grid;grid-template-columns:42px 1fr 48px 1fr;gap:4px 7px;line-height:18px}.chart-tooltip span{color:#aeb9b2}.chart-tooltip em{font-style:normal;color:#f17670}
 .industry-panel{margin-top:14px;background:#fff;border:1px solid var(--line)}
+.workspace.industry-view{grid-template-columns:minmax(0,1fr)}
+.industry-view article{width:100%;max-width:1800px;margin:0 auto;padding-top:18px}
+.industry-view .industry-panel{margin-top:0}
 .industry-grid{display:grid;grid-template-columns:repeat(3,1fr);max-height:410px;overflow:auto}
 .industry-item{padding:12px 14px;border:0;border-right:1px solid var(--line);border-bottom:1px solid var(--line);background:#fff;text-align:left;font:inherit;cursor:pointer;position:relative}
 .industry-item.active{background:#f1f6f3;box-shadow:inset 3px 0 #244136}
