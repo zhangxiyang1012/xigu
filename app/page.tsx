@@ -378,98 +378,38 @@ function Chart({
 function IndustryRotationMap({
   industries,
   selected,
-  onToggle,
 }: {
   industries: Industry[];
   selected: string[];
-  onToggle: (name: string) => void;
 }) {
-  const leaders = selected
-    .map((name) => industries.find((item) => item.name === name))
-    .filter((item): item is Industry => Boolean(item?.history?.length));
-  const dates = Array.from(
-    new Set(leaders.flatMap((item) => item.history.map((point) => point.date))),
-  )
-    .sort()
-    .slice(-90);
-  const color = (score: number, risk: number) => {
-    if (risk >= 65) return "#7f3430";
-    if (score >= 80) return "#df5149";
-    if (score >= 65) return "#ed8179";
-    if (score >= 50) return "#efd2ce";
-    if (score >= 35) return "#d9e5df";
-    if (score >= 20) return "#8fc5ae";
-    return "#3f9273";
-  };
-  if (!leaders.length || !dates.length)
-    return <div className="rotation-empty">请从顶部行业筛选器选择行业，查看90日轮动节奏</div>;
+  const dates = Array.from(new Set(industries.flatMap(item=>item.history.map(point=>point.date)))).sort().slice(-90);
+  const weekEnds=dates.filter((_,index)=>index%5===4||index===dates.length-1);
+  const weekly=weekEnds.map(date=>({date,leaders:industries.map(item=>{
+    const point=[...item.history].reverse().find(value=>value.date<=date);
+    return point?{item,point}:null;
+  }).filter((value):value is {item:Industry;point:Industry["history"][number]}=>Boolean(value)).sort((a,b)=>b.point.score-a.point.score).slice(0,5)}));
+  if (!weekly.length) return <div className="rotation-empty">暂无行业轮动历史数据</div>;
   return (
     <div className="rotation-map">
       <div className="rotation-map-head">
         <div>
-          <b>过去90个交易日行业轮动图</b>
-          <span>每格代表一个交易日，越红表示轮动越强，深色边框表示高风险</span>
+          <b>过去90个交易日 · 每周轮动 Top 5</b>
+          <span>按每周最后一个交易日的轮动强度排名，观察强势行业的进入、持续与退出</span>
         </div>
         <div className="rotation-legend">
-          <span><i className="weak" />弱势</span>
-          <span><i className="neutral" />中性</span>
-          <span><i className="strong" />强势</span>
+          <span><i className="selected" />已选行业</span>
           <span><i className="danger" />高风险</span>
         </div>
       </div>
-      <div className="rotation-scroll">
-        <div
-          className="rotation-table"
-          style={{ gridTemplateColumns: `106px repeat(${dates.length}, 10px)` }}
-        >
-          <div className="rotation-corner">行业 / 日期</div>
-          {dates.map((date, index) => (
-            <span
-              className="rotation-date"
-              key={date}
-              title={date}
-            >
-              {index % 15 === 0 ? date.slice(5) : ""}
-            </span>
-          ))}
-          {leaders.map((item) => {
-            const points = new Map(item.history.map((point) => [point.date, point]));
-            return [
-              <button
-                className={`rotation-name ${selected.includes(item.name) ? "active" : ""}`}
-                key={`${item.name}-name`}
-                onClick={() => onToggle(item.name)}
-              >
-                {item.name}
-              </button>,
-              ...dates.map((date) => {
-                const point = points.get(date);
-                return (
-                  <button
-                    className={`rotation-cell ${selected.includes(item.name) ? "active" : ""}`}
-                    key={`${item.name}-${date}`}
-                    style={{
-                      background: point ? color(point.score, point.risk) : "#f1f1ee",
-                      outline: point?.risk >= 65 ? "1px solid #6f241f" : "none",
-                    }}
-                    title={
-                      point
-                        ? `${item.name} ${date}\n轮动强度 ${point.score.toFixed(0)} · ${point.phase}\n风险 ${point.riskLevel} ${point.risk.toFixed(0)} · MA20上方 ${point.breadth.toFixed(0)}%`
-                        : `${item.name} ${date} 暂无数据`
-                    }
-                    onClick={() => onToggle(item.name)}
-                    aria-label={`${item.name} ${date}`}
-                  />
-                );
-              }),
-            ];
-          })}
+      <div className="weekly-rotation-scroll">
+        <div className="weekly-rotation" style={{gridTemplateColumns:`repeat(${weekly.length}, minmax(118px, 1fr))`}}>
+          {weekly.map(week=><section key={week.date} className="rotation-week">
+            <time>{week.date.slice(5)}</time>
+            {week.leaders.map(({item,point},index)=><div key={item.name} className={`${selected.includes(item.name)?"selected":""} ${point.risk>=65?"high-risk":""}`} title={`${item.name} ${week.date}\n轮动强度 ${point.score.toFixed(0)} · ${point.phase}\n风险 ${point.riskLevel} ${point.risk.toFixed(0)} · MA20上方 ${point.breadth.toFixed(0)}%`}>
+              <b>{index+1}</b><span>{item.name}</span><em>{point.score.toFixed(0)}</em>
+            </div>)}
+          </section>)}
         </div>
-      </div>
-      <div className="rotation-axis">
-        <span>{dates[0]}</span>
-        <span>← 行业强弱随时间迁移 →</span>
-        <span>{dates.at(-1)}</span>
       </div>
     </div>
   );
@@ -487,14 +427,19 @@ function IndustryGlobalFilter({
   onToggle: (name:string)=>void;
   onClear: ()=>void;
 }) {
+  const [filterQuery,setFilterQuery]=useState("");
+  const available=industries.filter(item=>!selected.includes(item.name)&&item.name.includes(filterQuery.trim())).sort((a,b)=>a.name.localeCompare(b.name,"zh-CN"));
   return <div className="industry-global-filter">
     <div className="global-filter-head">
       <div><b>全局行业筛选</b><span>热力图、轮动曲线、行业状态与风险明细同步筛选 · 最多6个行业</span></div>
-      <div className="compare-actions">
-        <select aria-label="全局选择行业" value="" onChange={event=>event.target.value&&onToggle(event.target.value)}>
-          <option value="">＋ 选择行业</option>
-          {industries.filter(item=>!selected.includes(item.name)).sort((a,b)=>a.name.localeCompare(b.name,"zh-CN")).map(item=><option key={item.name} value={item.name}>{item.name}</option>)}
-        </select>
+      <div className="compare-actions industry-picker-actions">
+        <details className="industry-picker">
+          <summary>＋ 选择行业 <small>{selected.length}/6</small></summary>
+          <div className="industry-picker-menu">
+            <input aria-label="搜索行业" placeholder="搜索申万二级行业" value={filterQuery} onChange={event=>setFilterQuery(event.target.value)}/>
+            <div>{available.map(item=><label key={item.name}><input type="checkbox" checked={false} disabled={selected.length>=6} onChange={()=>onToggle(item.name)}/><span>{item.name}</span><em>{item.rotation_score.toFixed(0)}</em></label>)}</div>
+          </div>
+        </details>
         <button onClick={onClear} disabled={!selected.length}>清空选择</button>
       </div>
     </div>
@@ -508,14 +453,13 @@ function IndustryGlobalFilter({
 function IndustryRotationCompare({
   industries,
   selected,
-  onRemove,
 }: {
   industries: Industry[];
   selected: string[];
-  onRemove: (name:string)=>void;
 }) {
+  const [hoverIndex,setHoverIndex]=useState<number|null>(null);
   const rows=selected.map(name=>industries.find(item=>item.name===name)).filter(Boolean) as Industry[];
-  if(!rows.length) return <div className="compare-empty">点击上方行业名称或色块，选择一个或多个行业查看轮动明细</div>;
+  if(!rows.length) return <div className="compare-empty">请使用顶部行业选择器，选择一个或多个行业查看轮动明细</div>;
   const lines=rows.map((item,index)=>{
     const history=item.history.slice(-90),base=history[0]?.index||1;
     const normalized=history.map(point=>({...point,value:point.index/base*100}));
@@ -523,15 +467,23 @@ function IndustryRotationCompare({
     return {item,index,normalized,min:Math.min(...values),max:Math.max(...values)};
   });
   const globalMin=Math.min(...lines.map(line=>line.min)),globalMax=Math.max(...lines.map(line=>line.max));
+  const maxLength=Math.max(...lines.map(line=>line.normalized.length));
   return <div className="rotation-compare">
     <div className="compare-head"><div><b>已选行业轮动明细</b><span>指数统一归一化为100</span></div></div>
-    <svg viewBox="0 0 900 180" preserveAspectRatio="none" aria-label="多行业90日轮动对比">
-      {[0,1,2,3].map(n=><line key={n} x1="0" x2="900" y1={20+n*45} y2={20+n*45}/>)}
-      {lines.map(line=><polyline key={line.item.name} style={{stroke:industryLineColors[line.index]}} points={line.normalized.map((point,i)=>`${i*900/Math.max(1,line.normalized.length-1)},${165-(point.value-globalMin)*145/Math.max(.01,globalMax-globalMin)}`).join(" ")}/>)}
-    </svg>
+    <div className="rotation-chart-wrap" onMouseLeave={()=>setHoverIndex(null)} onMouseMove={event=>{const rect=event.currentTarget.getBoundingClientRect();setHoverIndex(Math.max(0,Math.min(maxLength-1,Math.round((event.clientX-rect.left)/rect.width*(maxLength-1)))));}}>
+      <svg viewBox="0 0 900 180" preserveAspectRatio="none" aria-label="多行业90日轮动对比">
+        {[0,1,2,3].map(n=><line key={n} x1="0" x2="900" y1={20+n*45} y2={20+n*45}/>)}
+        {lines.map(line=><polyline key={line.item.name} style={{stroke:industryLineColors[line.index]}} points={line.normalized.map((point,i)=>`${i*900/Math.max(1,line.normalized.length-1)},${165-(point.value-globalMin)*145/Math.max(.01,globalMax-globalMin)}`).join(" ")}/>)}
+        {hoverIndex!==null&&<line className="hover-guide" x1={hoverIndex*900/Math.max(1,maxLength-1)} x2={hoverIndex*900/Math.max(1,maxLength-1)} y1="0" y2="180"/>}
+      </svg>
+      {hoverIndex!==null&&<div className={`rotation-tooltip ${hoverIndex>maxLength*.7?"left":""}`} style={{left:`${hoverIndex/Math.max(1,maxLength-1)*100}%`}}>
+        <b>{lines[0]?.normalized[Math.min(hoverIndex,lines[0].normalized.length-1)]?.date}</b>
+        {lines.map(line=>{const point=line.normalized[Math.min(hoverIndex,line.normalized.length-1)];return point&&<span key={line.item.name}><i style={{background:industryLineColors[line.index]}}/><strong>{line.item.name}</strong><em>{point.value.toFixed(2)}</em><small>{point.phase} · 强度{point.score.toFixed(0)} · 风险{point.riskLevel}{point.risk.toFixed(0)}</small></span>})}
+      </div>}
+    </div>
     <div className="compare-table">
       <div className="compare-row compare-labels"><b>行业</b><span>当前阶段</span><span>轮动强度</span><span>20日涨跌</span><span>MA20广度</span><span>风险</span></div>
-      {lines.map(line=><button className="compare-row" key={line.item.name} onClick={()=>onRemove(line.item.name)}><b><i style={{background:industryLineColors[line.index]}}/>{line.item.name}</b><span>{line.item.phase}第{line.item.phase_days}天</span><span>{line.item.rotation_score.toFixed(0)}</span><span className={line.item.return_20d<0?"trend-down":"trend-up"}>{line.item.return_20d>0?"+":""}{line.item.return_20d.toFixed(1)}%</span><span>{line.item.above_ma20_pct.toFixed(0)}%</span><span className={`risk-${line.item.risk_level}`}>{line.item.risk_level} {line.item.risk_score.toFixed(0)}</span></button>)}
+      {lines.map(line=><div className="compare-row" key={line.item.name}><b><i style={{background:industryLineColors[line.index]}}/>{line.item.name}</b><span>{line.item.phase}第{line.item.phase_days}天</span><span>{line.item.rotation_score.toFixed(0)}</span><span className={line.item.return_20d<0?"trend-down":"trend-up"}>{line.item.return_20d>0?"+":""}{line.item.return_20d.toFixed(1)}%</span><span>{line.item.above_ma20_pct.toFixed(0)}%</span><span className={`risk-${line.item.risk_level}`}>{line.item.risk_level} {line.item.risk_score.toFixed(0)}</span></div>)}
     </div>
   </div>
 }
@@ -655,11 +607,11 @@ export default function Home() {
     if(selected.industry_name && industries.some(x=>x.name===selected.industry_name)){
       setSelectedIndustry(selected.industry_name);
       setSelectedIndustries(current=>current.length?current:[selected.industry_name!]);
-    } else if(!selectedIndustry && industries.length) {
-      setSelectedIndustry(industries[0].name);
+    } else if(industries.length) {
+      setSelectedIndustry(current=>current||industries[0].name);
       setSelectedIndustries(current=>current.length?current:[industries[0].name]);
     }
-  },[selected.industry_name,industries,selectedIndustry]);
+  },[selected.industry_name,industries]);
   useEffect(()=>{fetch(`${API_BASE}/api/industry-leaders`).then(r=>r.json()).then(d=>setIndustryLeaders(d.leaders||[])).catch(()=>setIndustryLeaders([]))},[]);
   useEffect(()=>{fetch(`${API_BASE}/api/tags`).then(r=>r.json()).then(d=>setAvailableTags(d.tags||[])).catch(()=>setAvailableTags([]))},[]);
   useEffect(()=>{
@@ -998,10 +950,10 @@ export default function Home() {
           {activeView==="industry"&&<div className="industry-panel">
             <div className="section-title"><h2>90日行业轮动与风险</h2><span>申万二级行业 · {industries.length} 个行业</span></div>
             <IndustryGlobalFilter industries={industries} selected={selectedIndustries} onToggle={toggleIndustry} onClear={()=>{setSelectedIndustries([]);setSelectedIndustry("")}} />
-            <IndustryRotationMap industries={industries} selected={selectedIndustries} onToggle={toggleIndustry} />
-            <IndustryRotationCompare industries={industries} selected={selectedIndustries} onRemove={toggleIndustry} />
-            <div className="industry-subtitle"><b>已选行业最新状态</b><span>{selectedIndustryRows.length} 个行业 · 点击卡片可移出筛选</span></div>
-            <div className="industry-grid">{selectedIndustryRows.map((x)=><button className="industry-item active" onClick={()=>toggleIndustry(x.name)} key={x.name}><div><b>{x.name}</b><em className={x.avg_change_pct<0?"trend-down":"trend-up"}>{x.avg_change_pct>0?"+":""}{x.avg_change_pct.toFixed(2)}%</em></div><p><span>轮动强度 <strong>{x.rotation_score.toFixed(0)}</strong></span><span>20日 {x.return_20d>0?"+":""}{x.return_20d.toFixed(1)}%</span></p><div className="breadth"><i style={{width:`${x.above_ma20_pct}%`}}/></div><small>MA20上方 {x.above_ma20_pct.toFixed(0)}% · 涨{x.up_count} 跌{x.down_count}</small><strong className={x.phase==="下跌"||x.phase==="退潮"?"trend-down":"trend-up"}>{x.phase}第 {x.phase_days} 天</strong><span className={`risk-pill risk-${x.risk_level}`}>轮动风险 {x.risk_level} {x.risk_score.toFixed(0)}</span></button>)}</div>
+            <IndustryRotationMap industries={industries} selected={selectedIndustries} />
+            <IndustryRotationCompare industries={industries} selected={selectedIndustries} />
+            <div className="industry-subtitle"><b>已选行业最新状态</b><span>{selectedIndustryRows.length} 个行业 · 选择与取消统一在顶部操作</span></div>
+            <div className="industry-grid">{selectedIndustryRows.map((x)=><div className="industry-item active" key={x.name}><div><b>{x.name}</b><em className={x.avg_change_pct<0?"trend-down":"trend-up"}>{x.avg_change_pct>0?"+":""}{x.avg_change_pct.toFixed(2)}%</em></div><p><span>轮动强度 <strong>{x.rotation_score.toFixed(0)}</strong></span><span>20日 {x.return_20d>0?"+":""}{x.return_20d.toFixed(1)}%</span></p><div className="breadth"><i style={{width:`${x.above_ma20_pct}%`}}/></div><small>MA20上方 {x.above_ma20_pct.toFixed(0)}% · 涨{x.up_count} 跌{x.down_count}</small><strong className={x.phase==="下跌"||x.phase==="退潮"?"trend-down":"trend-up"}>{x.phase}第 {x.phase_days} 天</strong><span className={`risk-pill risk-${x.risk_level}`}>轮动风险 {x.risk_level} {x.risk_score.toFixed(0)}</span></div>)}</div>
             {industries.filter(x=>x.name===selectedIndustry&&selectedIndustries.includes(x.name)).map(x=><div className="industry-detail" key={x.name}>
               <div><b>{x.name} · 近90个交易日节奏</b><span>行业指数</span></div>
               <svg viewBox="0 0 900 120" preserveAspectRatio="none" aria-label={`${x.name}近90日行业指数`}>
