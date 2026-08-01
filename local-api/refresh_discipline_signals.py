@@ -84,7 +84,14 @@ async def refresh_one(connection, code):
     if risk == "高": sell_score += 20; sell_signals.append("行业轮动高风险")
     if change <= -9.8: sell_score += 40; sell_signals.append("当日跌停")
     sell_level = "退出" if sell_score >= 60 else "减仓" if sell_score >= 35 else "预警" if sell_score >= 20 else "持有"
-    defense = max(ma20, min(float(r["low"]) for r in rows[-5:]))
+    # ATR 风险线按交易纪律使用 1.5 ATR；最终防守位应是结构支撑与
+    # ATR 风险线中更严格（更高）的一个。已经位于现价上方的 MA20
+    # 属于压力位，不能再作为当前持仓的有效防守位。
+    atr_stop = max(0.0, close - 1.5 * atr14)
+    recent_low = min(float(r["low"]) for r in rows[-5:])
+    structure_candidates = (value for value in (ma20, recent_low) if 0 < value < close)
+    structure_support = max(structure_candidates, default=0.0)
+    defense = max(structure_support, atr_stop)
     await connection.execute(
         """INSERT INTO stock_discipline_signals(stock_code,trade_date,close,ma5,ma10,ma20,atr14,
         volume_ratio_5,volume_ratio_20,drawdown_20d,drawdown_60d,pullback_days,industry_rank,
@@ -102,7 +109,7 @@ async def refresh_one(connection, code):
         stop_atr_price=excluded.stop_atr_price,calculated_at=now()""",
         code, latest["trade_date"], close, ma5, ma10, ma20, atr14, vr5, vr20, dd20, dd60,
         pullback, rank, rotation, risk, score, sell_score, buy_level, sell_level, model,
-        buy_signals, sell_signals, blockers, defense, close-2*atr14)
+        buy_signals, sell_signals, blockers, defense, atr_stop)
     return True
 
 

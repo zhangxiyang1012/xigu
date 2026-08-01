@@ -1036,7 +1036,7 @@ export default function Home() {
                 <span><strong className={item.buy_level==="禁买"?"level-block":"level-buy"}>{item.buy_level}</strong><small>评分 {Number(item.buy_score).toFixed(0)}</small></span>
                 <span><strong className={item.sell_level==="退出"?"level-exit":""}>{item.sell_level}</strong><small>评分 {Number(item.sell_score).toFixed(0)}</small></span>
                 <span><b>{item.buy_model}</b><small>{[...(item.buy_signals||[]),...(item.sell_signals||[]),...(item.blockers||[])].slice(0,2).join("；")||"暂无强信号"}</small></span>
-                <span><b>{Number(item.defense_price||0).toFixed(2)}</b><small>ATR止损 {Number(item.stop_atr_price||0).toFixed(2)}</small></span>
+                <span><b>{Number(item.defense_price||0).toFixed(2)}</b><small>1.5ATR止损 {Number(item.stop_atr_price||0).toFixed(2)}</small></span>
               </button>)}
               {!radarSignals.length&&<p className="empty">尚未生成纪律信号，请先执行本地信号刷新。</p>}
             </div>
