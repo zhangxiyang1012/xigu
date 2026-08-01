@@ -1,8 +1,9 @@
 import asyncio
+import json
 import os
 import re
 from contextlib import asynccontextmanager
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import asyncpg
@@ -244,6 +245,43 @@ async def refresh_industries_job():
 async def refresh_discipline_job():
     async with pool.acquire() as connection:
         await refresh_discipline(connection)
+
+
+def eastmoney_codes(code: str) -> tuple[str, str]:
+    exchange = "SH" if code.startswith("6") else "BJ" if code.startswith(("4", "8", "9")) else "SZ"
+    return f"{exchange}{code}", f"{code}.{exchange}"
+
+
+async def sync_fundamentals(code: str):
+    survey_code, secu_code = eastmoney_codes(code)
+    async with httpx.AsyncClient(timeout=20, headers={"User-Agent": "Mozilla/5.0"}) as client:
+        survey_req, finance_req, concept_req = await asyncio.gather(
+            client.get("https://emweb.securities.eastmoney.com/PC_HSF10/CompanySurvey/CompanySurveyAjax", params={"code": survey_code}),
+            client.get("https://datacenter.eastmoney.com/securities/api/data/v1/get", params={"reportName":"RPT_F10_FINANCE_MAINFINADATA","columns":"ALL","filter":f'(SECUCODE="{secu_code}")',"pageNumber":1,"pageSize":1,"sortTypes":-1,"sortColumns":"REPORT_DATE"}),
+            client.get("https://datacenter-web.eastmoney.com/api/data/v1/get", params={"reportName":"RPT_F10_CORETHEME_BOARDTYPE","columns":"ALL","filter":f'(SECUCODE="{secu_code}")',"pageNumber":1,"pageSize":50}),
+        )
+    survey_req.raise_for_status(); finance_req.raise_for_status(); concept_req.raise_for_status()
+    base = survey_req.json().get("jbzl") or {}
+    finance_rows = ((finance_req.json().get("result") or {}).get("data") or [])
+    financial = finance_rows[0] if finance_rows else {}
+    concept_rows = ((concept_req.json().get("result") or {}).get("data") or [])
+    concepts = [{"name":x.get("BOARD_NAME"),"reason":x.get("SELECTED_BOARD_REASON")}
+                for x in concept_rows if x.get("BOARD_NAME") and x.get("SELECTED_BOARD_REASON")][:12]
+    report_date = date.fromisoformat(financial["REPORT_DATE"][:10]) if financial.get("REPORT_DATE") else None
+    async with pool.acquire() as connection:
+        await connection.execute("""INSERT INTO stock_fundamentals(stock_code,company_name,main_business,company_intro,
+          concepts,report_date,report_name,revenue,revenue_yoy,net_profit,net_profit_yoy,gross_margin,roe,total_shares,free_shares,updated_at)
+          VALUES($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,now())
+          ON CONFLICT(stock_code) DO UPDATE SET company_name=excluded.company_name,main_business=excluded.main_business,
+          company_intro=excluded.company_intro,concepts=excluded.concepts,report_date=excluded.report_date,
+          report_name=excluded.report_name,revenue=excluded.revenue,revenue_yoy=excluded.revenue_yoy,
+          net_profit=excluded.net_profit,net_profit_yoy=excluded.net_profit_yoy,gross_margin=excluded.gross_margin,
+          roe=excluded.roe,total_shares=excluded.total_shares,free_shares=excluded.free_shares,updated_at=now()""",
+          code,base.get("gsmc"),base.get("jyfw"),base.get("gsjj"),json.dumps(concepts,ensure_ascii=False),
+          report_date,financial.get("REPORT_DATE_NAME"),financial.get("TOTALOPERATEREVE"),
+          financial.get("TOTALOPERATEREVETZ"),financial.get("PARENTNETPROFIT"),
+          financial.get("PARENTNETPROFITTZ"),financial.get("XSMLL"),financial.get("ROEJQ"),
+          financial.get("TOTAL_SHARE"),financial.get("A_FREE_SHARE"))
 
 
 @app.get("/health")
@@ -751,6 +789,34 @@ async def get_portfolio():
         LEFT JOIN daily_quotes q ON q.stock_code=d.stock_code AND q.trade_date=d.trade_date
         ORDER BY greatest(coalesce(d.sell_score,0),coalesce(d.buy_score,0)) DESC,p.created_at DESC""")
     return {"positions": [dict(row) for row in rows]}
+
+
+@app.get("/api/stock-analysis")
+async def stock_analysis(code: str):
+    if len(code) != 6 or not code.isdigit(): raise HTTPException(400, "股票代码无效")
+    async with pool.acquire() as connection:
+        cached_at = await connection.fetchval("SELECT updated_at FROM stock_fundamentals WHERE stock_code=$1", code)
+    if not cached_at or cached_at < datetime.now(cached_at.tzinfo) - timedelta(days=7):
+        try: await sync_fundamentals(code)
+        except Exception as exc: print(f"fundamentals unavailable {code}: {exc}")
+    async with pool.acquire() as connection:
+        fundamental = await connection.fetchrow("""SELECT company_name,main_business,company_intro,concepts,
+          report_date,report_name,revenue,revenue_yoy,net_profit,net_profit_yoy,gross_margin,roe,total_shares,
+          free_shares,source,updated_at FROM stock_fundamentals WHERE stock_code=$1""", code)
+        technical = await connection.fetchrow("""SELECT trade_date,close,ma5,ma10,ma20,atr14,volume_ratio_5,
+          volume_ratio_20,drawdown_20d,drawdown_60d,pullback_days,industry_rank,industry_rotation_score,
+          industry_risk_level,buy_score,sell_score,buy_level,sell_level,buy_model,buy_signals,sell_signals,
+          blockers,defense_price,stop_atr_price FROM stock_discipline_signals WHERE stock_code=$1
+          ORDER BY trade_date DESC LIMIT 1""", code)
+        tags = await connection.fetch("SELECT tag_name,direction,category FROM stock_tags WHERE stock_code=$1 ORDER BY category,tag_name", code)
+    f = dict(fundamental) if fundamental else None
+    if f:
+        latest_price = number(technical["close"]) if technical else 0
+        f["total_market_cap"] = number(f.get("total_shares")) * latest_price
+        f["free_market_cap"] = number(f.get("free_shares")) * latest_price
+        rev_yoy, profit_yoy, profit = number(f.get("revenue_yoy")), number(f.get("net_profit_yoy")), number(f.get("net_profit"))
+        f["performance_support"] = "营收与利润同步增长" if rev_yoy > 0 and profit_yoy > 0 and profit > 0 else "收入改善，利润仍需验证" if rev_yoy > 0 else "业绩支撑偏弱，关注后续报告"
+    return {"fundamental": f, "technical": dict(technical) if technical else None, "tags": [dict(x) for x in tags]}
 
 
 @app.post("/api/portfolio")

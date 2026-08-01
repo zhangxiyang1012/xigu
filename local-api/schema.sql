@@ -129,6 +129,18 @@ CREATE TABLE IF NOT EXISTS portfolio_positions (
   quantity numeric(18,2), cost_price numeric(16,4), note text,
   created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
 );
+CREATE TABLE IF NOT EXISTS stock_fundamentals (
+  stock_code char(6) PRIMARY KEY REFERENCES stocks(code) ON DELETE CASCADE,
+  company_name text, main_business text, company_intro text,
+  concepts jsonb NOT NULL DEFAULT '[]'::jsonb,
+  report_date date, report_name varchar(32),
+  revenue numeric(22,2), revenue_yoy numeric(12,4),
+  net_profit numeric(22,2), net_profit_yoy numeric(12,4),
+  gross_margin numeric(12,4), roe numeric(12,4),
+  total_shares numeric(22,2), free_shares numeric(22,2),
+  source varchar(32) NOT NULL DEFAULT 'eastmoney',
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
 INSERT INTO discipline_rules(rule_key,rule_name,side,category,priority,description,parameters) VALUES
 ('B_MAIN_PULLBACK','主线缩量回调','buy','entry',90,'行业非高风险、股价位于MA20上方，连续2至5日缩量回调并出现拐点确认。','{"pullbackDays":[2,5],"maxVolumeRatio20":0.8,"requiresMA20":true}'::jsonb),
 ('B_ACTIVE_SECOND','活跃股二次参与','buy','entry',80,'近20日出现涨停或连续放量长阳，回调后重新站上MA5。','{"limitPct":9.8,"longBarPct":4,"lookback":20}'::jsonb),

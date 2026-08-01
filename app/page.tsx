@@ -72,6 +72,11 @@ type RadarSignal = Stock & {
 };
 type DisciplineRule = {rule_key:string;rule_name:string;side:string;category:string;priority:number;description:string};
 type PortfolioPosition = RadarSignal & {quantity?:number;cost_price?:number;note?:string};
+type StockAnalysis = {
+  fundamental?: {company_name?:string;main_business?:string;company_intro?:string;concepts?:{name:string;reason?:string}[]|string;report_date?:string;report_name?:string;revenue?:number;revenue_yoy?:number;net_profit?:number;net_profit_yoy?:number;gross_margin?:number;roe?:number;total_market_cap?:number;free_market_cap?:number;performance_support?:string;updated_at?:string};
+  technical?: {trade_date:string;close:number;ma5:number;ma10:number;ma20:number;atr14:number;volume_ratio_5:number;volume_ratio_20:number;drawdown_20d:number;drawdown_60d:number;pullback_days:number;industry_rank:number;industry_rotation_score:number;industry_risk_level:string;buy_score:number;sell_score:number;buy_level:string;sell_level:string;buy_model:string;buy_signals:string[];sell_signals:string[];blockers:string[];defense_price:number;stop_atr_price:number};
+  tags?: {tag_name:string;direction:string;category:string}[];
+};
 const reasonText = (value: unknown) =>
   Array.isArray(value) ? value.join("；") : typeof value === "string" ? value : "";
 const fallback: Stock[] = [
@@ -553,6 +558,8 @@ export default function Home() {
     [portfolio,setPortfolio]=useState<PortfolioPosition[]>([]),
     [portfolioQuery,setPortfolioQuery]=useState(""),
     [portfolioResults,setPortfolioResults]=useState<Stock[]>([]),
+    [stockAnalysis,setStockAnalysis]=useState<StockAnalysis>({}),
+    [analysisLoading,setAnalysisLoading]=useState(false),
     [query, setQuery] = useState(""),
     [sort,setSort]=useState<"default"|"desc"|"asc">("default"),
     [market, setMarket] = useState("全部A股"),
@@ -663,6 +670,7 @@ export default function Home() {
   useEffect(()=>{loadWatchlist()},[]);
   useEffect(()=>{if(activeView==="portfolio")loadPortfolio()},[activeView]);
   useEffect(()=>{if(!portfolioQuery.trim()){setPortfolioResults([]);return}const timer=setTimeout(()=>fetch(`${API_BASE}/api/search?q=${encodeURIComponent(portfolioQuery.trim())}`).then(r=>r.json()).then(d=>setPortfolioResults((d.stocks||[]).slice(0,8))).catch(()=>setPortfolioResults([])),250);return()=>clearTimeout(timer)},[portfolioQuery]);
+  useEffect(()=>{const controller=new AbortController();setAnalysisLoading(true);fetch(`${API_BASE}/api/stock-analysis?code=${selected.code}`,{signal:controller.signal}).then(r=>r.json()).then(d=>setStockAnalysis(d||{})).catch(e=>{if(e.name!=="AbortError")setStockAnalysis({})}).finally(()=>{if(!controller.signal.aborted)setAnalysisLoading(false)});return()=>controller.abort()},[selected.code]);
   const toggleWatch=async(code:string)=>{const watched=watchCodes.includes(code);await fetch(`${API_BASE}/api/watchlist/${code}`,{method:watched?"DELETE":"POST"});await loadWatchlist()};
   const addPosition=async(stock:Stock)=>{await fetch(`${API_BASE}/api/portfolio`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({code:stock.code})});setPortfolioQuery("");setPortfolioResults([]);await loadPortfolio()};
   const removePosition=async(code:string)=>{await fetch(`${API_BASE}/api/portfolio/${code}`,{method:"DELETE"});await loadPortfolio()};
@@ -916,6 +924,24 @@ export default function Home() {
               <b className={stockTrend.direction === "下跌" ? "trend-down" : "trend-up"}>{stockTrend.label}</b>
               <small>期间允许1个反向交易日</small>
             </div>
+          </div>
+          <div className="stock-analysis-grid">
+            <section className="fundamental-card">
+              <div className="analysis-card-head"><div><h2>基本面</h2><small>公司资料与最新财报 · 本地缓存</small></div><span>{stockAnalysis.fundamental?.report_name||"待同步"}</span></div>
+              {stockAnalysis.fundamental?<>
+                <div className="business-summary"><b>主营业务</b><p>{stockAnalysis.fundamental.main_business||stockAnalysis.fundamental.company_intro||"暂无主营业务资料"}</p></div>
+                <div className="fundamental-metrics"><div><small>业绩支撑</small><b>{stockAnalysis.fundamental.performance_support}</b></div><div><small>营业收入</small><b>{money(Number(stockAnalysis.fundamental.revenue||0))}</b><em className={Number(stockAnalysis.fundamental.revenue_yoy)<0?"trend-down":"trend-up"}>{Number(stockAnalysis.fundamental.revenue_yoy)>0?"+":""}{Number(stockAnalysis.fundamental.revenue_yoy||0).toFixed(1)}%</em></div><div><small>归母净利润</small><b>{money(Number(stockAnalysis.fundamental.net_profit||0))}</b><em className={Number(stockAnalysis.fundamental.net_profit_yoy)<0?"trend-down":"trend-up"}>{Number(stockAnalysis.fundamental.net_profit_yoy)>0?"+":""}{Number(stockAnalysis.fundamental.net_profit_yoy||0).toFixed(1)}%</em></div><div><small>毛利率 / ROE</small><b>{Number(stockAnalysis.fundamental.gross_margin||0).toFixed(1)}% / {Number(stockAnalysis.fundamental.roe||0).toFixed(1)}%</b></div><div><small>总市值</small><b>{money(Number(stockAnalysis.fundamental.total_market_cap||0))}</b></div><div><small>流通市值</small><b>{money(Number(stockAnalysis.fundamental.free_market_cap||0))}</b></div></div>
+                <div className="concept-list"><b>题材概念</b><div>{(()=>{const raw=stockAnalysis.fundamental?.concepts;const concepts=typeof raw==="string"?JSON.parse(raw||"[]"):raw||[];return concepts.map((x:{name:string;reason?:string})=><span key={x.name} title={x.reason||x.name}>{x.name}</span>)})()}</div></div>
+              </>:<p className="empty">{analysisLoading?"正在同步公司资料与财务数据…":"基本面数据暂时不可用"}</p>}
+            </section>
+            <section className="technical-card">
+              <div className="analysis-card-head"><div><h2>技术面与纪律匹配</h2><small>当前买入、卖出纪律关注指标</small></div><span>{stockAnalysis.technical?.trade_date||"待计算"}</span></div>
+              {stockAnalysis.technical?<><div className="discipline-status"><div><small>买入纪律</small><b className={stockAnalysis.technical.buy_level==="禁买"?"trend-down":"trend-up"}>{stockAnalysis.technical.buy_level} · {Number(stockAnalysis.technical.buy_score).toFixed(0)}分</b><em>{stockAnalysis.technical.buy_model}</em></div><div><small>卖出纪律</small><b className={stockAnalysis.technical.sell_level==="退出"?"trend-down":""}>{stockAnalysis.technical.sell_level} · {Number(stockAnalysis.technical.sell_score).toFixed(0)}分</b><em>行业风险 {stockAnalysis.technical.industry_risk_level}</em></div></div>
+                <div className="technical-metrics"><span>MA5 <b>{Number(stockAnalysis.technical.ma5).toFixed(2)}</b></span><span>MA10 <b>{Number(stockAnalysis.technical.ma10).toFixed(2)}</b></span><span>MA20 <b>{Number(stockAnalysis.technical.ma20).toFixed(2)}</b></span><span>ATR14 <b>{Number(stockAnalysis.technical.atr14).toFixed(2)}</b></span><span>5日量比 <b>{Number(stockAnalysis.technical.volume_ratio_5).toFixed(2)}</b></span><span>20日量比 <b>{Number(stockAnalysis.technical.volume_ratio_20).toFixed(2)}</b></span><span>20日回撤 <b>{Number(stockAnalysis.technical.drawdown_20d).toFixed(1)}%</b></span><span>防守位 <b>{Number(stockAnalysis.technical.defense_price).toFixed(2)}</b></span></div>
+                <div className="technical-tags">{(stockAnalysis.tags||[]).map(tag=><span className={tag.direction} key={`${tag.category}-${tag.tag_name}`}>{tag.tag_name}</span>)}</div>
+                <div className="discipline-reasons"><p><b>买入依据</b>{(stockAnalysis.technical.buy_signals||[]).join("；")||"暂无"}</p><p><b>卖出依据</b>{(stockAnalysis.technical.sell_signals||[]).join("；")||"暂无"}</p>{!!stockAnalysis.technical.blockers?.length&&<p className="blockers"><b>风险拦截</b>{stockAnalysis.technical.blockers.join("；")}</p>}</div>
+              </>:<p className="empty">{analysisLoading?"正在读取技术纪律指标…":"技术指标尚未计算"}</p>}
+            </section>
           </div>
           <div className="panel">
             <div className="panel-head">
