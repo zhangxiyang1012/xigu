@@ -710,22 +710,27 @@ export default function Home() {
         </div>
         <p>免费接口可能出现延迟或临时不可用，请勿据此直接交易</p>
       </div>
-      <section className={`workspace ${activeView==="industry"?"industry-view":""}`}>
-        {activeView==="market"&&<aside>
-          <div className="aside-head">
-            <h2>
-              股票列表 <span>{total.toLocaleString()}</span>
-            </h2>
-            <button>{searching ? "搜索中" : query ? `${filtered.length} 个结果` : loading ? "载入中" : `第 ${page}/${pageCount} 页`}</button>
+      {activeView==="market"&&<section className="market-search-panel">
+        <div className="market-search-line">
+          <div className="market-search-title">
+            <b>全市场检索</b>
+            <span>股票名称、代码、拼音或标签</span>
           </div>
-          <label className="search">
+          <label className="search market-search">
             <span>⌕</span>
             <input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="搜索名称 / 代码 / 标签"
+              placeholder="搜索股票名称 / 代码 / 拼音 / 标签"
             />
           </label>
+          <div className="market-search-result">
+            <span>{searching ? "搜索中" : loading ? "数据载入中" : query ? `${filtered.length} 个搜索结果` : `${total.toLocaleString()} 只股票`}</span>
+            {(query||selectedTags.length>0)&&<button onClick={()=>{setQuery("");setSelectedTags([]);setPage(1)}}>清除筛选</button>}
+          </div>
+        </div>
+        <div className="market-quick-tags">
+          <b>快捷标签</b>
           <div className="tag-filter" aria-label="股票标签筛选">
             {availableTags.slice(0,12).map(tag=>(
               <button
@@ -737,7 +742,16 @@ export default function Home() {
                 {tag.name}<small>{tag.stock_count}</small>
               </button>
             ))}
-            {!!selectedTags.length&&<button className="tag-clear" onClick={()=>{setSelectedTags([]);setPage(1)}}>清除</button>}
+          </div>
+        </div>
+      </section>}
+      <section className={`workspace ${activeView==="industry"?"industry-view":""}`}>
+        {activeView==="market"&&<aside>
+          <div className="aside-head">
+            <h2>
+              股票列表 <span>{total.toLocaleString()}</span>
+            </h2>
+            <button>{searching ? "搜索中" : query ? `${filtered.length} 个结果` : loading ? "载入中" : `第 ${page}/${pageCount} 页`}</button>
           </div>
           <div className="tabs">
             {["全部A股", "沪市", "深市", "创业板", "科创板"].map((m) => (
