@@ -405,7 +405,7 @@ function IndustryRotationMap({
         </div>
       </div>
       <div className="weekly-rotation-scroll">
-        <div className="weekly-rotation" style={{gridTemplateColumns:`repeat(${weekly.length}, minmax(118px, 1fr))`}}>
+        <div className="weekly-rotation" style={{gridTemplateColumns:`repeat(${weekly.length}, minmax(150px, 1fr))`}}>
           {weekly.map(week=><section key={week.date} className="rotation-week">
             <time>{week.date.slice(5)}</time>
             {week.leaders.map(({item,point},index)=><div key={item.name} className={`${selected.includes(item.name)?"selected":""} ${point.risk>=65?"high-risk":""}`} title={`${item.name} ${week.date}\n轮动强度 ${point.score.toFixed(0)} · ${point.phase}\n风险 ${point.riskLevel} ${point.risk.toFixed(0)} · MA20上方 ${point.breadth.toFixed(0)}%`}>
