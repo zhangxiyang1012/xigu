@@ -40,7 +40,7 @@ def tolerant_phase(points: list[dict], index: int) -> tuple[str, int, str]:
     return phase, best_days, best_direction
 
 
-async def refresh(connection: asyncpg.Connection) -> tuple[int, int]:
+async def refresh(connection: asyncpg.Connection, history_days: int = 220, output_days: int = 170) -> tuple[int, int]:
     rows = await connection.fetch(
         """
         WITH quotes AS (
@@ -59,7 +59,7 @@ async def refresh(connection: asyncpg.Connection) -> tuple[int, int]:
           WHERE s.industry_name IS NOT NULL
             AND s.industry_name <> ''
             AND s.industry_source = 'sw2021'
-            AND q.trade_date >= current_date - interval '220 days'
+            AND q.trade_date >= current_date - ($1 * interval '1 day')
         )
         SELECT industry_name,trade_date,count(*) AS member_count,
           avg(change_pct)::float AS avg_change_pct,
@@ -72,11 +72,11 @@ async def refresh(connection: asyncpg.Connection) -> tuple[int, int]:
           count(*) FILTER (WHERE change_pct < 0) AS down_count,
           max(change_pct)::float AS leader_change
         FROM quotes
-        WHERE trade_date >= current_date - interval '170 days'
+        WHERE trade_date >= current_date - ($2 * interval '1 day')
         GROUP BY industry_name,trade_date
         ORDER BY industry_name,trade_date
         """
-    )
+    , history_days, output_days)
     grouped: dict[str, list[dict]] = defaultdict(list)
     for row in rows:
         grouped[row["industry_name"]].append(dict(row))

@@ -141,6 +141,40 @@ CREATE TABLE IF NOT EXISTS stock_fundamentals (
   source varchar(32) NOT NULL DEFAULT 'eastmoney',
   updated_at timestamptz NOT NULL DEFAULT now()
 );
+CREATE TABLE IF NOT EXISTS strategy_backtest_runs (
+  id bigserial PRIMARY KEY,
+  started_at timestamptz NOT NULL DEFAULT now(), finished_at timestamptz,
+  start_date date NOT NULL, end_date date NOT NULL,
+  status varchar(16) NOT NULL DEFAULT 'running', stock_count integer NOT NULL DEFAULT 0,
+  event_count integer NOT NULL DEFAULT 0, trade_count integer NOT NULL DEFAULT 0,
+  parameters jsonb NOT NULL DEFAULT '{}'::jsonb, error text
+);
+CREATE TABLE IF NOT EXISTS strategy_backtest_events (
+  id bigserial PRIMARY KEY, run_id bigint NOT NULL REFERENCES strategy_backtest_runs(id) ON DELETE CASCADE,
+  stock_code char(6) NOT NULL REFERENCES stocks(code) ON DELETE CASCADE,
+  side varchar(8) NOT NULL, signal_date date NOT NULL, execution_date date NOT NULL,
+  execution_price numeric(16,4) NOT NULL, signal_level varchar(16) NOT NULL,
+  strategy_name varchar(48) NOT NULL, matched_rules text[] NOT NULL DEFAULT ARRAY[]::text[],
+  forward_returns jsonb NOT NULL DEFAULT '{}'::jsonb,
+  UNIQUE(run_id,stock_code,side,signal_date)
+);
+CREATE INDEX IF NOT EXISTS backtest_events_run_side_idx ON strategy_backtest_events(run_id,side,signal_date);
+CREATE TABLE IF NOT EXISTS strategy_backtest_trades (
+  id bigserial PRIMARY KEY, run_id bigint NOT NULL REFERENCES strategy_backtest_runs(id) ON DELETE CASCADE,
+  stock_code char(6) NOT NULL REFERENCES stocks(code) ON DELETE CASCADE,
+  buy_signal_date date NOT NULL, buy_date date NOT NULL, buy_price numeric(16,4) NOT NULL,
+  buy_strategy varchar(48) NOT NULL, buy_rules text[] NOT NULL DEFAULT ARRAY[]::text[],
+  sell_signal_date date, sell_date date, sell_price numeric(16,4),
+  sell_strategy varchar(48), sell_rules text[] NOT NULL DEFAULT ARRAY[]::text[],
+  holding_days integer NOT NULL DEFAULT 0, return_pct numeric(12,4), status varchar(12) NOT NULL
+);
+CREATE TABLE IF NOT EXISTS strategy_backtest_summaries (
+  run_id bigint NOT NULL REFERENCES strategy_backtest_runs(id) ON DELETE CASCADE,
+  side varchar(12) NOT NULL, horizon varchar(8) NOT NULL, trading_days integer NOT NULL,
+  sample_count integer NOT NULL, avg_return_pct numeric(12,4), median_return_pct numeric(12,4),
+  win_rate_pct numeric(10,4), best_return_pct numeric(12,4), worst_return_pct numeric(12,4),
+  PRIMARY KEY(run_id,side,horizon)
+);
 INSERT INTO discipline_rules(rule_key,rule_name,side,category,priority,description,parameters) VALUES
 ('B0_EXCLUSION','B0 基础排除','buy','gate',100,'ST/退市整理、上市不足120日、近20日均成交额低于1亿元、连续一字板、放量破位未止跌、行业退潮或系统性风险时不开新仓。','{}'::jsonb),
 ('B1_MARKET','B1 市场环境门槛','buy','gate',95,'市场不得处于系统性风险，主线核心股不可批量破位；大级别下降期只允许小仓位反弹策略。','{}'::jsonb),

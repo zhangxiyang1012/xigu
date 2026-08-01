@@ -72,6 +72,9 @@ type RadarSignal = Stock & {
 };
 type DisciplineRule = {rule_key:string;rule_name:string;side:string;category:string;priority:number;description:string};
 type PortfolioPosition = RadarSignal & {quantity?:number;cost_price?:number;note?:string};
+type BacktestSummary = {side:string;horizon:string;trading_days:number;sample_count:number;avg_return_pct:number;median_return_pct:number;win_rate_pct:number;best_return_pct:number;worst_return_pct:number};
+type BacktestData = {run?:{id:number;status:string;start_date:string;end_date:string;stock_count:number;event_count:number;trade_count:number;parameters:Record<string,unknown>};summaries:BacktestSummary[];trades:Record<string,number>;strategies:{side:string;strategy:string;samples:number;avg_return_pct:number;win_rate_pct:number}[];events:{side:string;signal_date:string;execution_date:string;signal_level:string;strategy_name:string;matched_rules:string[];execution_price:number;code:string;name:string;industry_name:string}[]};
+type PositionModel = {market?:{regime:string;factor:number;breadth:number;high_risk_share:number;trade_date:string};positions:{code:string;target_weight_pct:number;risk_weight_pct:number;stop_distance_pct:number;industry_factor:number;signal_factor:number;market_factor:number}[];limits?:Record<string,number>};
 type StockAnalysis = {
   fundamental?: {company_name?:string;main_business?:string;company_intro?:string;concepts?:{name:string;reason?:string}[]|string;report_date?:string;report_name?:string;revenue?:number;revenue_yoy?:number;net_profit?:number;net_profit_yoy?:number;gross_margin?:number;roe?:number;total_market_cap?:number;free_market_cap?:number;performance_support?:string;updated_at?:string};
   technical?: {trade_date:string;close:number;ma5:number;ma10:number;ma20:number;atr14:number;volume_ratio_5:number;volume_ratio_20:number;drawdown_20d:number;drawdown_60d:number;pullback_days:number;industry_rank:number;industry_rotation_score:number;industry_risk_level:string;buy_score:number;sell_score:number;buy_level:string;sell_level:string;buy_model:string;buy_signals:string[];sell_signals:string[];blockers:string[];defense_price:number;stop_atr_price:number};
@@ -503,7 +506,7 @@ export default function Home() {
     [industryLeaders,setIndustryLeaders]=useState<IndustryLeader[]>([]),
     [selectedIndustry, setSelectedIndustry] = useState(""),
     [selectedIndustries, setSelectedIndustries] = useState<string[]>([]),
-    [activeView,setActiveView]=useState<"market"|"industry"|"radar"|"portfolio">("market"),
+    [activeView,setActiveView]=useState<"market"|"industry"|"radar"|"portfolio"|"backtest">("market"),
     [radarSide,setRadarSide]=useState<"all"|"buy"|"sell">("all"),
     [radarQuery,setRadarQuery]=useState(""),
     [radarLevel,setRadarLevel]=useState(""),
@@ -515,6 +518,8 @@ export default function Home() {
     [portfolio,setPortfolio]=useState<PortfolioPosition[]>([]),
     [portfolioQuery,setPortfolioQuery]=useState(""),
     [portfolioResults,setPortfolioResults]=useState<Stock[]>([]),
+    [backtestData,setBacktestData]=useState<BacktestData>({summaries:[],trades:{},strategies:[],events:[]}),
+    [positionModel,setPositionModel]=useState<PositionModel>({positions:[]}),
     [stockAnalysis,setStockAnalysis]=useState<StockAnalysis>({}),
     [analysisLoading,setAnalysisLoading]=useState(false),
     [query, setQuery] = useState(""),
@@ -626,7 +631,8 @@ export default function Home() {
   const loadWatchlist=()=>fetch(`${API_BASE}/api/watchlist`).then(r=>r.json()).then(d=>setWatchCodes((d.stocks||[]).map((x:{code:string})=>x.code))).catch(()=>setWatchCodes([]));
   const loadPortfolio=()=>fetch(`${API_BASE}/api/portfolio`).then(r=>r.json()).then(d=>setPortfolio(d.positions||[])).catch(()=>setPortfolio([]));
   useEffect(()=>{loadWatchlist()},[]);
-  useEffect(()=>{if(activeView==="portfolio")loadPortfolio()},[activeView]);
+  useEffect(()=>{if(activeView==="portfolio"){loadPortfolio();fetch(`${API_BASE}/api/position-model`).then(r=>r.json()).then(setPositionModel).catch(()=>setPositionModel({positions:[]}))}},[activeView]);
+  useEffect(()=>{if(activeView==="backtest")fetch(`${API_BASE}/api/backtest/latest`).then(r=>r.json()).then(d=>setBacktestData(d)).catch(()=>setBacktestData({summaries:[],trades:{},strategies:[],events:[]}))},[activeView]);
   useEffect(()=>{if(!portfolioQuery.trim()){setPortfolioResults([]);return}const timer=setTimeout(()=>fetch(`${API_BASE}/api/search?q=${encodeURIComponent(portfolioQuery.trim())}`).then(r=>r.json()).then(d=>setPortfolioResults((d.stocks||[]).slice(0,8))).catch(()=>setPortfolioResults([])),250);return()=>clearTimeout(timer)},[portfolioQuery]);
   useEffect(()=>{const controller=new AbortController();setAnalysisLoading(true);fetch(`${API_BASE}/api/stock-analysis?code=${selected.code}`,{signal:controller.signal}).then(r=>r.json()).then(d=>setStockAnalysis(d||{})).catch(e=>{if(e.name!=="AbortError")setStockAnalysis({})}).finally(()=>{if(!controller.signal.aborted)setAnalysisLoading(false)});return()=>controller.abort()},[selected.code]);
   const toggleWatch=async(code:string)=>{const watched=watchCodes.includes(code);await fetch(`${API_BASE}/api/watchlist/${code}`,{method:watched?"DELETE":"POST"});await loadWatchlist()};
@@ -687,6 +693,7 @@ export default function Home() {
           <button className={activeView==="industry"?"nav-active":""} onClick={()=>setActiveView("industry")}>行业分析</button>
           <button className={activeView==="radar"?"nav-active":""} onClick={()=>setActiveView("radar")}>信号雷达</button>
           <button className={activeView==="portfolio"?"nav-active":""} onClick={()=>setActiveView("portfolio")}>持仓诊断</button>
+          <button className={activeView==="backtest"?"nav-active":""} onClick={()=>setActiveView("backtest")}>策略回测</button>
         </nav>
         <div className="status">
           <i /> 免费行情 · 盘中延迟 <button className="avatar">ZX</button>
@@ -995,6 +1002,7 @@ export default function Home() {
           </div>}
           {activeView==="portfolio"&&<div className="portfolio-panel">
             <div className="section-title"><div><h2>持仓诊断</h2><small>将持仓股票加入本地股票池，集中查看纪律信号和匹配策略</small></div><span>{portfolio.length} 只持仓</span></div>
+            {positionModel.market&&<div className="position-market"><b>动态仓位环境：{positionModel.market.regime}</b><span>市场风险系数 {positionModel.market.factor.toFixed(1)} · 行业MA20广度 {positionModel.market.breadth.toFixed(0)}% · 高风险行业 {positionModel.market.high_risk_share.toFixed(0)}%</span><em>单笔风险0.8% · 单股≤15% · 单行业≤35%</em></div>}
             <div className="radar-rules radar-rules-top portfolio-rules"><h3>完整买入与卖出纪律</h3><div className="radar-rule-columns"><section><b>买入纪律</b>{disciplineRules.filter(rule=>rule.side==="buy").map(rule=><p key={rule.rule_key}><strong>{rule.rule_name}</strong><span>{rule.description}</span></p>)}</section><section><b>卖出纪律</b>{disciplineRules.filter(rule=>rule.side==="sell").map(rule=><p key={rule.rule_key}><strong>{rule.rule_name}</strong><span>{rule.description}</span></p>)}</section></div></div>
             <div className="portfolio-search"><label className="search"><span>⌕</span><input value={portfolioQuery} onChange={e=>setPortfolioQuery(e.target.value)} placeholder="搜索股票名称 / 代码 / 拼音并加入持仓"/></label>
               {!!portfolioResults.length&&<div className="portfolio-search-results">{portfolioResults.map(stock=><button key={stock.code} onClick={()=>addPosition(stock)}><span><b>{stock.name}</b><small>{stock.code} · {stock.industry_name||stock.market}</small></span><strong>＋ 加入持仓</strong></button>)}</div>}
@@ -1007,12 +1015,22 @@ export default function Home() {
                   <div className="portfolio-discipline-grid">
                     <section><b>买入纪律 · {item.buy_level||"待计算"}</b><small>评分 {Number(item.buy_score||0).toFixed(0)}</small><h4>已满足条件</h4>{(item.buy_signals||[]).map(signal=><p className="discipline-hit" key={signal}>✓ {signal}</p>)}{!(item.buy_signals||[]).length&&<p>暂无已满足的买入条件</p>}<h4>阻断与禁买项</h4>{(item.blockers||[]).map(signal=><p className="discipline-block" key={signal}>! {signal}</p>)}{!(item.blockers||[]).length&&<p>当前未触发阻断项</p>}</section>
                     <section><b>卖出纪律 · {item.sell_level||"待计算"}</b><small>评分 {Number(item.sell_score||0).toFixed(0)}</small><h4>已触发条件</h4>{(item.sell_signals||[]).map(signal=><p className="discipline-block" key={signal}>! {signal}</p>)}{!(item.sell_signals||[]).length&&<p>当前未触发卖出条件</p>}<h4>风险价格</h4><p>最终防守位 <strong>{Number(item.defense_price||0).toFixed(2)}</strong></p><p>1.5ATR止损 <strong>{Number(item.stop_atr_price||0).toFixed(2)}</strong></p></section>
-                    <section><b>匹配模型</b><small>{item.buy_model||"无匹配模型"}</small><h4>执行提示</h4><p>先核对市场环境和行业风险，再结合量价结构确认；防守位触发时优先执行纪律。</p><h4>数据日期</h4><p>{item.trade_date||"暂无计算日期"}</p></section>
+                    <section><b>匹配模型</b><small>{item.buy_model||"无匹配模型"}</small><h4>动态仓位建议</h4>{(()=>{const advice=positionModel.positions.find(x=>x.code===item.code);return advice?<><p>目标仓位 <strong>{advice.target_weight_pct.toFixed(2)}%</strong></p><p>ATR风险仓位 {advice.risk_weight_pct.toFixed(2)}% · 防守距离 {advice.stop_distance_pct.toFixed(2)}%</p><p>行业系数 {advice.industry_factor} · 信号系数 {advice.signal_factor}</p></>:<p>暂无仓位建议</p>})()}<h4>执行提示</h4><p>先核对市场环境和行业风险，再结合量价结构确认；防守位触发时优先执行纪律。</p><h4>数据日期</h4><p>{item.trade_date||"暂无计算日期"}</p></section>
                   </div>
                 </details>
               </div>)}
               {!portfolio.length&&<p className="empty">持仓股票池为空，请使用上方搜索加入股票。</p>}
             </div>
+          </div>}
+          {activeView==="backtest"&&<div className="backtest-panel">
+            <div className="section-title"><div><h2>三年交易纪律回测</h2><small>历史当日信号 → 下一交易日开盘模拟成交 → 多周期有效率评估</small></div><span>{backtestData.run?`${backtestData.run.start_date} 至 ${backtestData.run.end_date}`:"尚未运行"}</span></div>
+            {backtestData.run?<>
+              <div className="backtest-notes"><b>无未来数据泄漏</b><span>买入：仅“买入确认”且无阻断项；卖出：减仓/退出、跌破买入防守位、时间止损或移动止盈；已计佣金、印花税和滑点。</span><em>{backtestData.run.stock_count}只股票 · {backtestData.run.event_count}个信号 · {backtestData.run.trade_count}笔交易</em></div>
+              <div className="backtest-cards"><div><small>已闭合交易</small><b>{Number(backtestData.trades.closed_count||0).toFixed(0)}</b></div><div><small>平均收益</small><b className={Number(backtestData.trades.avg_return_pct)<0?"trend-down":"trend-up"}>{Number(backtestData.trades.avg_return_pct||0).toFixed(2)}%</b></div><div><small>交易胜率</small><b>{Number(backtestData.trades.win_rate_pct||0).toFixed(1)}%</b></div><div><small>平均持有</small><b>{Number(backtestData.trades.avg_holding_days||0).toFixed(1)}日</b></div><div><small>最佳 / 最差</small><b>{Number(backtestData.trades.best_return_pct||0).toFixed(1)}% / {Number(backtestData.trades.worst_return_pct||0).toFixed(1)}%</b></div></div>
+              <div className="backtest-section"><h3>买入与卖出信号的多周期有效率</h3><p>买入收益为信号后实际涨跌；卖出收益为“规避收益”，正数表示卖出后股价下跌、该卖出有效。</p><div className="backtest-horizon"><div className="backtest-horizon-row head"><b>周期</b><span>买入平均收益</span><span>买入胜率</span><span>买入样本</span><span>卖出规避收益</span><span>卖出有效率</span><span>卖出样本</span></div>{["1月","3月","半年","1年","2年","3年"].map(horizon=>{const buy=backtestData.summaries.find(x=>x.side==="buy"&&x.horizon===horizon),sell=backtestData.summaries.find(x=>x.side==="sell"&&x.horizon===horizon);return <div className="backtest-horizon-row" key={horizon}><b>{horizon}</b><span className={Number(buy?.avg_return_pct)<0?"trend-down":"trend-up"}>{buy?`${Number(buy.avg_return_pct).toFixed(2)}%`:"—"}</span><span>{buy?`${Number(buy.win_rate_pct).toFixed(1)}%`:"—"}</span><span>{buy?.sample_count||0}</span><span className={Number(sell?.avg_return_pct)<0?"trend-down":"trend-up"}>{sell?`${Number(sell.avg_return_pct).toFixed(2)}%`:"—"}</span><span>{sell?`${Number(sell.win_rate_pct).toFixed(1)}%`:"—"}</span><span>{sell?.sample_count||0}</span></div>})}</div></div>
+              <div className="backtest-columns"><section><h3>策略分组表现</h3>{backtestData.strategies.slice(0,12).map(item=><div className="strategy-result" key={`${item.side}-${item.strategy}`}><b>{item.side==="buy"?"买":"卖"} · {item.strategy}</b><span>{item.samples}笔</span><em className={Number(item.avg_return_pct)<0?"trend-down":"trend-up"}>交易收益 {Number(item.avg_return_pct).toFixed(2)}% · 胜率 {Number(item.win_rate_pct).toFixed(1)}%</em></div>)}</section><section><h3>最近模拟节点</h3>{backtestData.events.slice(0,20).map(item=><div className="backtest-event" key={`${item.code}-${item.side}-${item.signal_date}`}><b className={item.side==="buy"?"trend-up":"trend-down"}>{item.side==="buy"?"买入":"卖出"}</b><span>{item.name} {item.code}</span><em>{item.signal_date} → {item.execution_date} · {item.strategy_name}</em><small>{(item.matched_rules||[]).join("；")}</small></div>)}</section></div>
+              <div className="position-model"><h3>动态仓位管理模型 · 待纳入对照回测</h3><p><b>目标仓位 = 市场风险预算 × 行业轮动系数 × 个股信号系数 × 波动率调整</b></p><div><span>市场风险预算：正常100%、谨慎60%、系统风险30%</span><span>行业系数：前3名1.2，前10名1.0，其余0.5，高风险0</span><span>个股系数：买入确认1.0、候选0.5、观察0</span><span>ATR反算：单笔风险≤账户0.8%，单股≤15%，单行业≤35%</span></div></div>
+            </>:<p className="empty">三年回测正在运行或尚未生成结果。</p>}
           </div>}
           {activeView==="market"&&<div className="lower">
             <div className="signal-log">

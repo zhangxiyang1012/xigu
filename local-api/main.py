@@ -723,6 +723,72 @@ async def discipline_rules():
     return {"rules": [dict(row) for row in rows]}
 
 
+@app.get("/api/backtest/latest")
+async def latest_backtest():
+    async with pool.acquire() as connection:
+        run = await connection.fetchrow("SELECT * FROM strategy_backtest_runs ORDER BY id DESC LIMIT 1")
+        if not run: return {"run": None, "summaries": [], "trades": {}, "strategies": [], "events": []}
+        summaries = await connection.fetch("""SELECT side,horizon,trading_days,sample_count,avg_return_pct,
+          median_return_pct,win_rate_pct,best_return_pct,worst_return_pct FROM strategy_backtest_summaries
+          WHERE run_id=$1 ORDER BY side,trading_days""", run["id"])
+        trade_stats = await connection.fetchrow("""SELECT count(*) FILTER(WHERE status='closed') closed_count,
+          count(*) FILTER(WHERE status='open') open_count,avg(return_pct) FILTER(WHERE status='closed') avg_return_pct,
+          percentile_cont(.5) WITHIN GROUP(ORDER BY return_pct) FILTER(WHERE status='closed') median_return_pct,
+          100.0*avg(CASE WHEN return_pct>0 THEN 1 ELSE 0 END) FILTER(WHERE status='closed') win_rate_pct,
+          avg(holding_days) FILTER(WHERE status='closed') avg_holding_days,
+          max(return_pct) FILTER(WHERE status='closed') best_return_pct,
+          min(return_pct) FILTER(WHERE status='closed') worst_return_pct
+          FROM strategy_backtest_trades WHERE run_id=$1""", run["id"])
+        strategies = await connection.fetch("""SELECT 'buy' side,buy_strategy strategy,count(*) samples,
+          avg(return_pct) avg_return_pct,100.0*avg(CASE WHEN return_pct>0 THEN 1 ELSE 0 END) win_rate_pct
+          FROM strategy_backtest_trades WHERE run_id=$1 AND status='closed' GROUP BY buy_strategy
+          UNION ALL SELECT 'sell',coalesce(sell_strategy,'未卖出'),count(*),avg(return_pct),
+          100.0*avg(CASE WHEN return_pct>0 THEN 1 ELSE 0 END)
+          FROM strategy_backtest_trades WHERE run_id=$1 AND status='closed' GROUP BY sell_strategy
+          ORDER BY side,samples DESC""", run["id"])
+        events = await connection.fetch("""SELECT e.side,e.signal_date,e.execution_date,e.signal_level,
+          e.strategy_name,e.matched_rules,e.execution_price,s.code,s.name,s.industry_name
+          FROM strategy_backtest_events e JOIN stocks s ON s.code=e.stock_code WHERE e.run_id=$1
+          ORDER BY e.signal_date DESC,e.id DESC LIMIT 100""", run["id"])
+    run_dict = dict(run)
+    if isinstance(run_dict.get("parameters"), str): run_dict["parameters"] = json.loads(run_dict["parameters"])
+    return {"run": run_dict, "summaries": [dict(row) for row in summaries], "trades": dict(trade_stats),
+            "strategies": [dict(row) for row in strategies], "events": [dict(row) for row in events]}
+
+
+@app.post("/api/backtest/run")
+async def start_backtest():
+    from backtest_strategies import run
+    async with pool.acquire() as connection:
+        run_id, events, trades = await run(connection)
+    return {"run_id": run_id, "events": events, "trades": trades}
+
+
+@app.get("/api/position-model")
+async def position_model():
+    from position_model import market_regime, target_position
+    async with pool.acquire() as connection:
+        market = await connection.fetchrow("""SELECT avg(above_ma20_pct) breadth,
+          100.0*avg(CASE WHEN risk_level='高' THEN 1 ELSE 0 END) high_risk_share,max(trade_date) trade_date
+          FROM industry_daily_metrics WHERE trade_date=(SELECT max(trade_date) FROM industry_daily_metrics)""")
+        rows = await connection.fetch("""SELECT p.stock_code code,s.name,s.industry_name,d.close,d.defense_price,
+          d.buy_level,d.industry_rank,d.industry_risk_level FROM portfolio_positions p JOIN stocks s ON s.code=p.stock_code
+          LEFT JOIN LATERAL(SELECT * FROM stock_discipline_signals WHERE stock_code=p.stock_code ORDER BY trade_date DESC LIMIT 1)d ON true
+          ORDER BY p.created_at""")
+    breadth, high_risk = number(market["breadth"] if market else 0), number(market["high_risk_share"] if market else 0)
+    regime, factor = market_regime(breadth, high_risk)
+    positions = []
+    for row in rows:
+        item = dict(row)
+        item.update(target_position(close=number(row["close"]), defense=number(row["defense_price"]),
+          buy_level=row["buy_level"] or "", industry_rank=row["industry_rank"],
+          industry_risk=row["industry_risk_level"] or "中", market_factor=factor))
+        positions.append(item)
+    return {"market": {"regime": regime, "factor": factor, "breadth": breadth,
+            "high_risk_share": high_risk, "trade_date": market["trade_date"] if market else None}, "positions": positions,
+            "limits": {"risk_per_trade_pct": .8, "stock_max_pct": 15, "industry_max_pct": 35}}
+
+
 @app.get("/api/radar")
 async def radar(side: str = "all", level: str = "", industry: str = "", q: str = "", only_watch: bool = False, limit: int = 100):
     limit = min(300, max(1, limit))
