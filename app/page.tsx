@@ -387,13 +387,13 @@ function IndustryRotationMap({
   const weekly=weekEnds.map(date=>({date,leaders:industries.map(item=>{
     const point=[...item.history].reverse().find(value=>value.date<=date);
     return point?{item,point}:null;
-  }).filter((value):value is {item:Industry;point:Industry["history"][number]}=>Boolean(value)).sort((a,b)=>b.point.score-a.point.score).slice(0,5)}));
+  }).filter((value):value is {item:Industry;point:Industry["history"][number]}=>Boolean(value)).sort((a,b)=>b.point.score-a.point.score).slice(0,10)}));
   if (!weekly.length) return <div className="rotation-empty">暂无行业轮动历史数据</div>;
   return (
     <div className="rotation-map">
       <div className="rotation-map-head">
         <div>
-          <b>过去90个交易日 · 每周轮动 Top 5</b>
+          <b>过去90个交易日 · 每周轮动 Top 10</b>
           <span>按每周最后一个交易日的轮动强度排名，观察强势行业的进入、持续与退出</span>
         </div>
         <div className="rotation-legend">
@@ -428,12 +428,14 @@ function IndustryGlobalFilter({
   onClear: ()=>void;
 }) {
   const [filterQuery,setFilterQuery]=useState("");
+  const pickerRef=useRef<HTMLDetailsElement>(null);
   const available=industries.filter(item=>!selected.includes(item.name)&&item.name.includes(filterQuery.trim())).sort((a,b)=>a.name.localeCompare(b.name,"zh-CN"));
+  useEffect(()=>{const close=(event:PointerEvent)=>{if(pickerRef.current?.open&&!pickerRef.current.contains(event.target as Node))pickerRef.current.removeAttribute("open")};document.addEventListener("pointerdown",close);return()=>document.removeEventListener("pointerdown",close)},[]);
   return <div className="industry-global-filter">
     <div className="global-filter-head">
       <div><b>全局行业筛选</b><span>热力图、轮动曲线、行业状态与风险明细同步筛选 · 最多6个行业</span></div>
       <div className="compare-actions industry-picker-actions">
-        <details className="industry-picker">
+        <details className="industry-picker" ref={pickerRef}>
           <summary>＋ 选择行业 <small>{selected.length}/6</small></summary>
           <div className="industry-picker-menu">
             <input aria-label="搜索行业" placeholder="搜索申万二级行业" value={filterQuery} onChange={event=>setFilterQuery(event.target.value)}/>
@@ -462,23 +464,24 @@ function IndustryRotationCompare({
   if(!rows.length) return <div className="compare-empty">请使用顶部行业选择器，选择一个或多个行业查看轮动明细</div>;
   const lines=rows.map((item,index)=>{
     const history=item.history.slice(-90),base=history[0]?.index||1;
-    const normalized=history.map(point=>({...point,value:point.index/base*100}));
+    const normalized=history.map(point=>({...point,value:(point.index/base-1)*100}));
     const values=normalized.map(point=>point.value);
     return {item,index,normalized,min:Math.min(...values),max:Math.max(...values)};
   });
-  const globalMin=Math.min(...lines.map(line=>line.min)),globalMax=Math.max(...lines.map(line=>line.max));
+  const globalMin=Math.min(0,...lines.map(line=>line.min)),globalMax=Math.max(0,...lines.map(line=>line.max));
   const maxLength=Math.max(...lines.map(line=>line.normalized.length));
   return <div className="rotation-compare">
-    <div className="compare-head"><div><b>已选行业轮动明细</b><span>指数统一归一化为100</span></div></div>
+    <div className="compare-head"><div><b>近90个交易日相对涨跌节奏</b><span>以区间首日为0%，线上升表示行业指数相对首日走强，下降表示走弱</span></div><div className="compare-scale"><b>{globalMax>0?"+":""}{globalMax.toFixed(1)}%</b><span>区间上沿</span></div></div>
     <div className="rotation-chart-wrap" onMouseLeave={()=>setHoverIndex(null)} onMouseMove={event=>{const rect=event.currentTarget.getBoundingClientRect();setHoverIndex(Math.max(0,Math.min(maxLength-1,Math.round((event.clientX-rect.left)/rect.width*(maxLength-1)))));}}>
       <svg viewBox="0 0 900 180" preserveAspectRatio="none" aria-label="多行业90日轮动对比">
         {[0,1,2,3].map(n=><line key={n} x1="0" x2="900" y1={20+n*45} y2={20+n*45}/>)}
+        <line className="zero-guide" x1="0" x2="900" y1={165-(0-globalMin)*145/Math.max(.01,globalMax-globalMin)} y2={165-(0-globalMin)*145/Math.max(.01,globalMax-globalMin)}/>
         {lines.map(line=><polyline key={line.item.name} style={{stroke:industryLineColors[line.index]}} points={line.normalized.map((point,i)=>`${i*900/Math.max(1,line.normalized.length-1)},${165-(point.value-globalMin)*145/Math.max(.01,globalMax-globalMin)}`).join(" ")}/>)}
         {hoverIndex!==null&&<line className="hover-guide" x1={hoverIndex*900/Math.max(1,maxLength-1)} x2={hoverIndex*900/Math.max(1,maxLength-1)} y1="0" y2="180"/>}
       </svg>
       {hoverIndex!==null&&<div className={`rotation-tooltip ${hoverIndex>maxLength*.7?"left":""}`} style={{left:`${hoverIndex/Math.max(1,maxLength-1)*100}%`}}>
         <b>{lines[0]?.normalized[Math.min(hoverIndex,lines[0].normalized.length-1)]?.date}</b>
-        {lines.map(line=>{const point=line.normalized[Math.min(hoverIndex,line.normalized.length-1)];return point&&<span key={line.item.name}><i style={{background:industryLineColors[line.index]}}/><strong>{line.item.name}</strong><em>{point.value.toFixed(2)}</em><small>{point.phase} · 强度{point.score.toFixed(0)} · 风险{point.riskLevel}{point.risk.toFixed(0)}</small></span>})}
+        {lines.map(line=>{const point=line.normalized[Math.min(hoverIndex,line.normalized.length-1)];return point&&<span key={line.item.name}><i style={{background:industryLineColors[line.index]}}/><strong>{line.item.name}</strong><em>{point.value>0?"+":""}{point.value.toFixed(2)}%</em><small>{point.phase} · 强度{point.score.toFixed(0)} · 风险{point.riskLevel}{point.risk.toFixed(0)}</small></span>})}
       </div>}
     </div>
     <div className="compare-table">
@@ -619,7 +622,7 @@ export default function Home() {
     const timer=setTimeout(()=>fetch(`${API_BASE}/api/radar?side=${radarSide}&level=${encodeURIComponent(radarLevel)}&only_watch=${radarOnlyWatch}&q=${encodeURIComponent(radarQuery.trim())}&limit=200`).then(r=>r.json()).then(d=>{setRadarSignals(d.signals||[]);setRadarSummary(d.summary||{})}).catch(()=>setRadarSignals([])),250);
     return()=>clearTimeout(timer);
   },[activeView,radarSide,radarOnlyWatch,radarQuery,radarLevel]);
-  useEffect(()=>{if(activeView==="radar")fetch(`${API_BASE}/api/discipline-rules`).then(r=>r.json()).then(d=>setDisciplineRules(d.rules||[])).catch(()=>setDisciplineRules([]))},[activeView]);
+  useEffect(()=>{if(activeView==="radar"||activeView==="portfolio")fetch(`${API_BASE}/api/discipline-rules`).then(r=>r.json()).then(d=>setDisciplineRules(d.rules||[])).catch(()=>setDisciplineRules([]))},[activeView]);
   const loadWatchlist=()=>fetch(`${API_BASE}/api/watchlist`).then(r=>r.json()).then(d=>setWatchCodes((d.stocks||[]).map((x:{code:string})=>x.code))).catch(()=>setWatchCodes([]));
   const loadPortfolio=()=>fetch(`${API_BASE}/api/portfolio`).then(r=>r.json()).then(d=>setPortfolio(d.positions||[])).catch(()=>setPortfolio([]));
   useEffect(()=>{loadWatchlist()},[]);
@@ -955,10 +958,7 @@ export default function Home() {
             <div className="industry-subtitle"><b>已选行业最新状态</b><span>{selectedIndustryRows.length} 个行业 · 选择与取消统一在顶部操作</span></div>
             <div className="industry-grid">{selectedIndustryRows.map((x)=><div className="industry-item active" key={x.name}><div><b>{x.name}</b><em className={x.avg_change_pct<0?"trend-down":"trend-up"}>{x.avg_change_pct>0?"+":""}{x.avg_change_pct.toFixed(2)}%</em></div><p><span>轮动强度 <strong>{x.rotation_score.toFixed(0)}</strong></span><span>20日 {x.return_20d>0?"+":""}{x.return_20d.toFixed(1)}%</span></p><div className="breadth"><i style={{width:`${x.above_ma20_pct}%`}}/></div><small>MA20上方 {x.above_ma20_pct.toFixed(0)}% · 涨{x.up_count} 跌{x.down_count}</small><strong className={x.phase==="下跌"||x.phase==="退潮"?"trend-down":"trend-up"}>{x.phase}第 {x.phase_days} 天</strong><span className={`risk-pill risk-${x.risk_level}`}>轮动风险 {x.risk_level} {x.risk_score.toFixed(0)}</span></div>)}</div>
             {industries.filter(x=>x.name===selectedIndustry&&selectedIndustries.includes(x.name)).map(x=><div className="industry-detail" key={x.name}>
-              <div><b>{x.name} · 近90个交易日节奏</b><span>行业指数</span></div>
-              <svg viewBox="0 0 900 120" preserveAspectRatio="none" aria-label={`${x.name}近90日行业指数`}>
-                <polyline points={x.history.map((p,i)=>`${i*900/Math.max(1,x.history.length-1)},${110-(p.index-Math.min(...x.history.map(v=>v.index)))*95/Math.max(.01,Math.max(...x.history.map(v=>v.index))-Math.min(...x.history.map(v=>v.index)))}`).join(" ")} />
-              </svg>
+              <div><b>{x.name} · 当前风险诊断</b><span>走势比较请查看上方“相对涨跌节奏”</span></div>
               <div className="risk-reasons"><b>接下来一段时间风险：{x.risk_level}</b><span>{reasonText(x.risk_reasons)}</span><small>这是基于价格、量能、市场广度与周期位置的概率提示，不构成确定预测。</small></div>
               {!!industryLeaders.filter(v=>v.industry_name===x.name).length&&<div className="leader-analysis">
                 <h3>PDF策略提及的行业核心股</h3>
@@ -995,11 +995,22 @@ export default function Home() {
           </div>}
           {activeView==="portfolio"&&<div className="portfolio-panel">
             <div className="section-title"><div><h2>持仓诊断</h2><small>将持仓股票加入本地股票池，集中查看纪律信号和匹配策略</small></div><span>{portfolio.length} 只持仓</span></div>
+            <div className="radar-rules radar-rules-top portfolio-rules"><h3>完整买入与卖出纪律</h3><div className="radar-rule-columns"><section><b>买入纪律</b>{disciplineRules.filter(rule=>rule.side==="buy").map(rule=><p key={rule.rule_key}><strong>{rule.rule_name}</strong><span>{rule.description}</span></p>)}</section><section><b>卖出纪律</b>{disciplineRules.filter(rule=>rule.side==="sell").map(rule=><p key={rule.rule_key}><strong>{rule.rule_name}</strong><span>{rule.description}</span></p>)}</section></div></div>
             <div className="portfolio-search"><label className="search"><span>⌕</span><input value={portfolioQuery} onChange={e=>setPortfolioQuery(e.target.value)} placeholder="搜索股票名称 / 代码 / 拼音并加入持仓"/></label>
               {!!portfolioResults.length&&<div className="portfolio-search-results">{portfolioResults.map(stock=><button key={stock.code} onClick={()=>addPosition(stock)}><span><b>{stock.name}</b><small>{stock.code} · {stock.industry_name||stock.market}</small></span><strong>＋ 加入持仓</strong></button>)}</div>}
             </div>
             <div className="portfolio-list"><div className="portfolio-row portfolio-head"><span>持仓股票</span><span>价格 / 涨跌</span><span>买入信号</span><span>卖出信号</span><span>匹配策略与依据</span><span>操作</span></div>
-              {portfolio.map(item=><div className="portfolio-row" key={item.code}><button className="portfolio-stock" onClick={()=>{setSelected(item);setActiveView("market")}}><b>{item.name}</b><small>{item.code} · {item.industry_name||"未分类"}</small></button><span><b>{Number(item.price||0).toFixed(2)}</b><small className={Number(item.change)<0?"trend-down":"trend-up"}>{Number(item.change)>0?"+":""}{Number(item.change||0).toFixed(2)}%</small></span><span><strong className={item.buy_level==="禁买"?"level-block":"level-buy"}>{item.buy_level||"待计算"}</strong><small>评分 {Number(item.buy_score||0).toFixed(0)}</small></span><span><strong className={item.sell_level==="退出"?"level-exit":""}>{item.sell_level||"待计算"}</strong><small>评分 {Number(item.sell_score||0).toFixed(0)}</small></span><span><b>{item.buy_model||"无匹配模型"}</b><small>{[...(item.buy_signals||[]),...(item.sell_signals||[]),...(item.blockers||[])].slice(0,3).join("；")||"暂无强信号"}</small></span><button className="portfolio-remove" onClick={()=>removePosition(item.code)}>移出</button></div>)}
+              {portfolio.map(item=><div className="portfolio-position" key={item.code}>
+                <div className="portfolio-row"><button className="portfolio-stock" onClick={()=>{setSelected(item);setActiveView("market")}}><b>{item.name}</b><small>{item.code} · {item.industry_name||"未分类"}</small></button><span><b>{Number(item.price||0).toFixed(2)}</b><small className={Number(item.change)<0?"trend-down":"trend-up"}>{Number(item.change)>0?"+":""}{Number(item.change||0).toFixed(2)}%</small></span><span><strong className={item.buy_level==="禁买"?"level-block":"level-buy"}>{item.buy_level||"待计算"}</strong><small>评分 {Number(item.buy_score||0).toFixed(0)}</small></span><span><strong className={item.sell_level==="退出"?"level-exit":""}>{item.sell_level||"待计算"}</strong><small>评分 {Number(item.sell_score||0).toFixed(0)}</small></span><span><b>{item.buy_model||"无匹配模型"}</b><small>{[...(item.buy_signals||[]),...(item.sell_signals||[]),...(item.blockers||[])].slice(0,3).join("；")||"暂无强信号"}</small></span><button className="portfolio-remove" onClick={()=>removePosition(item.code)}>移出</button></div>
+                <details className="portfolio-discipline" open>
+                  <summary>详细买入与卖出纪律 <small>点击收起</small></summary>
+                  <div className="portfolio-discipline-grid">
+                    <section><b>买入纪律 · {item.buy_level||"待计算"}</b><small>评分 {Number(item.buy_score||0).toFixed(0)}</small><h4>已满足条件</h4>{(item.buy_signals||[]).map(signal=><p className="discipline-hit" key={signal}>✓ {signal}</p>)}{!(item.buy_signals||[]).length&&<p>暂无已满足的买入条件</p>}<h4>阻断与禁买项</h4>{(item.blockers||[]).map(signal=><p className="discipline-block" key={signal}>! {signal}</p>)}{!(item.blockers||[]).length&&<p>当前未触发阻断项</p>}</section>
+                    <section><b>卖出纪律 · {item.sell_level||"待计算"}</b><small>评分 {Number(item.sell_score||0).toFixed(0)}</small><h4>已触发条件</h4>{(item.sell_signals||[]).map(signal=><p className="discipline-block" key={signal}>! {signal}</p>)}{!(item.sell_signals||[]).length&&<p>当前未触发卖出条件</p>}<h4>风险价格</h4><p>最终防守位 <strong>{Number(item.defense_price||0).toFixed(2)}</strong></p><p>1.5ATR止损 <strong>{Number(item.stop_atr_price||0).toFixed(2)}</strong></p></section>
+                    <section><b>匹配模型</b><small>{item.buy_model||"无匹配模型"}</small><h4>执行提示</h4><p>先核对市场环境和行业风险，再结合量价结构确认；防守位触发时优先执行纪律。</p><h4>数据日期</h4><p>{item.trade_date||"暂无计算日期"}</p></section>
+                  </div>
+                </details>
+              </div>)}
               {!portfolio.length&&<p className="empty">持仓股票池为空，请使用上方搜索加入股票。</p>}
             </div>
           </div>}
