@@ -83,3 +83,51 @@ CREATE TABLE IF NOT EXISTS industry_leader_analysis (
   turning_reasons jsonb NOT NULL DEFAULT '[]',
   calculated_at timestamptz NOT NULL DEFAULT now()
 );
+CREATE TABLE IF NOT EXISTS discipline_rules (
+  rule_key varchar(48) PRIMARY KEY,
+  rule_name varchar(80) NOT NULL,
+  side varchar(12) NOT NULL,
+  category varchar(24) NOT NULL,
+  priority integer NOT NULL DEFAULT 50,
+  description text NOT NULL,
+  parameters jsonb NOT NULL DEFAULT '{}'::jsonb,
+  enabled boolean NOT NULL DEFAULT true,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS stock_discipline_signals (
+  stock_code char(6) NOT NULL REFERENCES stocks(code) ON DELETE CASCADE,
+  trade_date date NOT NULL,
+  close numeric(16,4) NOT NULL,
+  ma5 numeric(16,4), ma10 numeric(16,4), ma20 numeric(16,4), atr14 numeric(16,4),
+  volume_ratio_5 numeric(10,4), volume_ratio_20 numeric(10,4),
+  drawdown_20d numeric(10,4), drawdown_60d numeric(10,4),
+  pullback_days integer NOT NULL DEFAULT 0,
+  industry_rank integer, industry_rotation_score numeric(10,4),
+  industry_risk_level varchar(8),
+  buy_score numeric(10,2) NOT NULL DEFAULT 0,
+  sell_score numeric(10,2) NOT NULL DEFAULT 0,
+  buy_level varchar(16) NOT NULL,
+  sell_level varchar(16) NOT NULL,
+  buy_model varchar(32) NOT NULL DEFAULT '无',
+  buy_signals text[] NOT NULL DEFAULT ARRAY[]::text[],
+  sell_signals text[] NOT NULL DEFAULT ARRAY[]::text[],
+  blockers text[] NOT NULL DEFAULT ARRAY[]::text[],
+  defense_price numeric(16,4), stop_atr_price numeric(16,4),
+  calculated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY(stock_code, trade_date)
+);
+CREATE INDEX IF NOT EXISTS discipline_signal_latest_idx
+  ON stock_discipline_signals (trade_date DESC, buy_score DESC, sell_score DESC);
+CREATE INDEX IF NOT EXISTS discipline_signal_stock_idx
+  ON stock_discipline_signals (stock_code, trade_date DESC);
+INSERT INTO discipline_rules(rule_key,rule_name,side,category,priority,description,parameters) VALUES
+('B_MAIN_PULLBACK','主线缩量回调','buy','entry',90,'行业非高风险、股价位于MA20上方，连续2至5日缩量回调并出现拐点确认。','{"pullbackDays":[2,5],"maxVolumeRatio20":0.8,"requiresMA20":true}'::jsonb),
+('B_ACTIVE_SECOND','活跃股二次参与','buy','entry',80,'近20日出现涨停或连续放量长阳，回调后重新站上MA5。','{"limitPct":9.8,"longBarPct":4,"lookback":20}'::jsonb),
+('B_LEADER_RECOVERY','核心股深跌修复','buy','entry',70,'60日高点回撤15%至30%，重新站上MA5且量能恢复。','{"drawdownMin":-30,"drawdownMax":-15}'::jsonb),
+('X_INDUSTRY_HIGH_RISK','行业高风险禁买','block','risk',100,'行业轮动风险为高时，禁止生成买入确认。','{}'::jsonb),
+('S_BREAK_MA10','跌破MA10减仓','sell','exit',70,'收盘跌破MA10且成交量不萎缩，进入减仓预警。','{"minVolumeRatio20":1}'::jsonb),
+('S_BREAK_MA20','放量跌破MA20退出','sell','exit',100,'收盘跌破MA20且成交量高于20日均量，触发退出信号。','{"minVolumeRatio20":1}'::jsonb),
+('S_LIMIT_DOWN','跌停风险退出','sell','exit',100,'当日跌幅小于等于-9.8%，触发高优先级退出。','{"limitPct":-9.8}'::jsonb)
+ON CONFLICT(rule_key) DO UPDATE SET rule_name=excluded.rule_name,side=excluded.side,
+category=excluded.category,priority=excluded.priority,description=excluded.description,
+parameters=excluded.parameters,updated_at=now();

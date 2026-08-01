@@ -65,6 +65,12 @@ type IndustryLeader = {
   amplitude_ratio:number; lead_lag_days:number; lead_lag_correlation:number;
   turning_signal:string; turning_date?:string; turning_reasons:string[];
 };
+type RadarSignal = Stock & {
+  trade_date:string; buy_score:number; sell_score:number; buy_level:string; sell_level:string;
+  buy_model:string; buy_signals:string[]; sell_signals:string[]; blockers:string[];
+  defense_price:number; stop_atr_price:number; volume_ratio_20:number; pullback_days:number;
+};
+type DisciplineRule = {rule_key:string;rule_name:string;side:string;category:string;priority:number;description:string};
 const reasonText = (value: unknown) =>
   Array.isArray(value) ? value.join("；") : typeof value === "string" ? value : "";
 const fallback: Stock[] = [
@@ -536,7 +542,11 @@ export default function Home() {
     [industryLeaders,setIndustryLeaders]=useState<IndustryLeader[]>([]),
     [selectedIndustry, setSelectedIndustry] = useState(""),
     [selectedIndustries, setSelectedIndustries] = useState<string[]>([]),
-    [activeView,setActiveView]=useState<"market"|"industry">("market"),
+    [activeView,setActiveView]=useState<"market"|"industry"|"radar">("market"),
+    [radarSide,setRadarSide]=useState<"all"|"buy"|"sell">("all"),
+    [radarSignals,setRadarSignals]=useState<RadarSignal[]>([]),
+    [radarSummary,setRadarSummary]=useState({buy_confirmed:0,candidates:0,reduce:0,exit:0}),
+    [disciplineRules,setDisciplineRules]=useState<DisciplineRule[]>([]),
     [query, setQuery] = useState(""),
     [sort,setSort]=useState<"default"|"desc"|"asc">("default"),
     [market, setMarket] = useState("全部A股"),
@@ -638,6 +648,11 @@ export default function Home() {
   },[selected.industry_name,industries,selectedIndustry]);
   useEffect(()=>{fetch(`${API_BASE}/api/industry-leaders`).then(r=>r.json()).then(d=>setIndustryLeaders(d.leaders||[])).catch(()=>setIndustryLeaders([]))},[]);
   useEffect(()=>{fetch(`${API_BASE}/api/tags`).then(r=>r.json()).then(d=>setAvailableTags(d.tags||[])).catch(()=>setAvailableTags([]))},[]);
+  useEffect(()=>{
+    if(activeView!=="radar")return;
+    fetch(`${API_BASE}/api/radar?side=${radarSide}&limit=200`).then(r=>r.json()).then(d=>{setRadarSignals(d.signals||[]);setRadarSummary(d.summary||{})}).catch(()=>setRadarSignals([]));
+    fetch(`${API_BASE}/api/discipline-rules`).then(r=>r.json()).then(d=>setDisciplineRules(d.rules||[])).catch(()=>setDisciplineRules([]));
+  },[activeView,radarSide]);
   const toggleIndustry=(name:string)=>{
     if(selectedIndustries.includes(name)){
       const next=selectedIndustries.filter(item=>item!==name);
@@ -691,7 +706,7 @@ export default function Home() {
         <nav>
           <button className={activeView==="market"?"nav-active":""} onClick={()=>setActiveView("market")}>个股分析</button>
           <button className={activeView==="industry"?"nav-active":""} onClick={()=>setActiveView("industry")}>行业分析</button>
-          <button>信号雷达</button>
+          <button className={activeView==="radar"?"nav-active":""} onClick={()=>setActiveView("radar")}>信号雷达</button>
           <button>自选组合</button>
         </nav>
         <div className="status">
@@ -745,7 +760,7 @@ export default function Home() {
           </div>
         </div>
       </section>}
-      <section className={`workspace ${activeView==="industry"?"industry-view":""}`}>
+      <section className={`workspace ${activeView!=="market"?"industry-view":""}`}>
         {activeView==="market"&&<aside>
           <div className="aside-head">
             <h2>
@@ -960,6 +975,27 @@ export default function Home() {
                 </button>)}
               </div>}
             </div>)}
+          </div>}
+          {activeView==="radar"&&<div className="radar-panel">
+            <div className="section-title"><div><h2>交易纪律信号雷达</h2><small>行情事实 → 纪律条件 → 信号评分 → 风险拦截</small></div><span>每日收盘后计算 · 仅作决策辅助</span></div>
+            <div className="radar-summary">
+              <div><small>买入确认</small><b>{radarSummary.buy_confirmed}</b></div><div><small>买入候选</small><b>{radarSummary.candidates}</b></div>
+              <div><small>减仓信号</small><b>{radarSummary.reduce}</b></div><div><small>退出信号</small><b>{radarSummary.exit}</b></div>
+            </div>
+            <div className="radar-filters">{(["all","buy","sell"] as const).map(value=><button key={value} className={radarSide===value?"active":""} onClick={()=>setRadarSide(value)}>{value==="all"?"全部信号":value==="buy"?"买入纪律":"卖出纪律"}</button>)}</div>
+            <div className="radar-table">
+              <div className="radar-row radar-head"><span>股票 / 行业</span><span>收盘 / 涨跌</span><span>买入纪律</span><span>卖出纪律</span><span>模型与依据</span><span>防守位</span></div>
+              {radarSignals.map(item=><button className="radar-row" key={item.code} onClick={()=>{setSelected(item);setActiveView("market")}}>
+                <span><b>{item.name}</b><small>{item.code} · {item.industry_name||"未分类"}</small></span>
+                <span><b>{Number(item.price).toFixed(2)}</b><small className={Number(item.change)<0?"trend-down":"trend-up"}>{Number(item.change)>0?"+":""}{Number(item.change).toFixed(2)}%</small></span>
+                <span><strong className={item.buy_level==="禁买"?"level-block":"level-buy"}>{item.buy_level}</strong><small>评分 {Number(item.buy_score).toFixed(0)}</small></span>
+                <span><strong className={item.sell_level==="退出"?"level-exit":""}>{item.sell_level}</strong><small>评分 {Number(item.sell_score).toFixed(0)}</small></span>
+                <span><b>{item.buy_model}</b><small>{[...(item.buy_signals||[]),...(item.sell_signals||[]),...(item.blockers||[])].slice(0,2).join("；")||"暂无强信号"}</small></span>
+                <span><b>{Number(item.defense_price||0).toFixed(2)}</b><small>ATR止损 {Number(item.stop_atr_price||0).toFixed(2)}</small></span>
+              </button>)}
+              {!radarSignals.length&&<p className="empty">尚未生成纪律信号，请先执行本地信号刷新。</p>}
+            </div>
+            <div className="radar-rules"><h3>当前启用规则</h3>{disciplineRules.map(rule=><div key={rule.rule_key}><b>{rule.rule_name}</b><span>{rule.description}</span><em>优先级 {rule.priority}</em></div>)}</div>
           </div>}
           {activeView==="market"&&<div className="lower">
             <div className="signal-log">

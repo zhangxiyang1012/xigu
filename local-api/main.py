@@ -15,6 +15,7 @@ from pypinyin import Style, lazy_pinyin
 from refresh_industries import refresh as refresh_industry_metrics
 from refresh_leaders import refresh as refresh_leader_metrics
 from refresh_tags import refresh as refresh_stock_tags, refresh_one as refresh_one_stock_tags
+from refresh_discipline_signals import refresh as refresh_discipline, refresh_one as refresh_one_discipline
 
 DB = os.environ["DATABASE_URL"]
 pool: asyncpg.Pool
@@ -208,6 +209,7 @@ async def lifespan(app):
     scheduler = AsyncIOScheduler(timezone="Asia/Shanghai")
     scheduler.add_job(refresh_tags_job, "cron", hour=17, minute=10)
     scheduler.add_job(refresh_industries_job, "cron", hour=17, minute=15)
+    scheduler.add_job(refresh_discipline_job, "cron", hour=17, minute=20)
     scheduler.start()
     yield
     scheduler.shutdown()
@@ -231,6 +233,11 @@ async def refresh_tags_job():
 async def refresh_industries_job():
     async with pool.acquire() as connection:
         await refresh_industry_metrics(connection)
+
+
+async def refresh_discipline_job():
+    async with pool.acquire() as connection:
+        await refresh_discipline(connection)
 
 
 @app.get("/health")
@@ -640,6 +647,7 @@ async def history(code: str):
             ],
         )
         await refresh_one_stock_tags(connection, code)
+        await refresh_one_discipline(connection, code)
         refreshed_tags = await connection.fetch(
             """
             SELECT tag_name FROM stock_tags
@@ -653,6 +661,51 @@ async def history(code: str):
         "rows": parsed,
         "tags": [row["tag_name"] for row in refreshed_tags],
     }
+
+
+@app.post("/api/discipline-signals/refresh")
+async def refresh_discipline_signals():
+    async with pool.acquire() as connection:
+        count = await refresh_discipline(connection)
+    return {"stocks": count}
+
+
+@app.get("/api/discipline-rules")
+async def discipline_rules():
+    async with pool.acquire() as connection:
+        rows = await connection.fetch(
+            """SELECT rule_key,rule_name,side,category,priority,description,parameters
+               FROM discipline_rules WHERE enabled ORDER BY priority DESC,rule_key""")
+    return {"rules": [dict(row) for row in rows]}
+
+
+@app.get("/api/radar")
+async def radar(side: str = "all", level: str = "", industry: str = "", limit: int = 100):
+    limit = min(300, max(1, limit))
+    async with pool.acquire() as connection:
+        rows = await connection.fetch(
+            """SELECT DISTINCT ON (d.stock_code) d.stock_code AS code,s.name,s.market,s.industry_name,
+              d.trade_date,d.close AS price,q.change_pct AS change,d.ma5,d.ma10,d.ma20,d.atr14,
+              d.volume_ratio_5,d.volume_ratio_20,d.drawdown_20d,d.drawdown_60d,d.pullback_days,
+              d.industry_rank,d.industry_rotation_score,d.industry_risk_level,d.buy_score,d.sell_score,
+              d.buy_level,d.sell_level,d.buy_model,d.buy_signals,d.sell_signals,d.blockers,
+              d.defense_price,d.stop_atr_price
+            FROM stock_discipline_signals d JOIN stocks s ON s.code=d.stock_code
+            LEFT JOIN daily_quotes q ON q.stock_code=d.stock_code AND q.trade_date=d.trade_date
+            WHERE ($1='' OR s.industry_name=$1) AND ($2='' OR d.buy_level=$2 OR d.sell_level=$2)
+            ORDER BY d.stock_code,d.trade_date DESC""", industry, level)
+    items = [dict(row) for row in rows]
+    if side == "buy": items.sort(key=lambda x: number(x["buy_score"]), reverse=True)
+    elif side == "sell": items.sort(key=lambda x: number(x["sell_score"]), reverse=True)
+    else: items.sort(key=lambda x: max(number(x["buy_score"]), number(x["sell_score"])), reverse=True)
+    items = items[:limit]
+    summary = {
+        "buy_confirmed": sum(item["buy_level"] == "买入确认" for item in items),
+        "candidates": sum(item["buy_level"] == "候选" for item in items),
+        "reduce": sum(item["sell_level"] == "减仓" for item in items),
+        "exit": sum(item["sell_level"] == "退出" for item in items),
+    }
+    return {"side": side, "summary": summary, "signals": items}
 
 
 @app.get("/api/industries")
