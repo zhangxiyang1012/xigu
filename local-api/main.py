@@ -737,12 +737,12 @@ async def radar(side: str = "all", level: str = "", industry: str = "", q: str =
               d.defense_price,d.stop_atr_price
             FROM stock_discipline_signals d JOIN stocks s ON s.code=d.stock_code
             LEFT JOIN daily_quotes q ON q.stock_code=d.stock_code AND q.trade_date=d.trade_date
-            WHERE ($1='' OR s.industry_name=$1) AND ($2='' OR d.buy_level=$2 OR d.sell_level=$2)
-              AND (NOT $3 OR EXISTS(SELECT 1 FROM watchlist w WHERE w.stock_code=d.stock_code))
-              AND ($4='' OR s.code LIKE $4 OR s.name LIKE $4
-                OR ($5<>'' AND (s.name_pinyin LIKE '%'||$5||'%' OR s.name_initials LIKE '%'||$5||'%'))
-                OR EXISTS(SELECT 1 FROM stock_tags t WHERE t.stock_code=d.stock_code AND t.tag_name LIKE $4))
-            ORDER BY d.stock_code,d.trade_date DESC""", industry, level, only_watch, f"%{q}%", pinyin_query)
+            WHERE ($1='' OR s.industry_name=$1)
+              AND (NOT $2 OR EXISTS(SELECT 1 FROM watchlist w WHERE w.stock_code=d.stock_code))
+              AND ($3='' OR s.code LIKE $3 OR s.name LIKE $3
+                OR ($4<>'' AND (s.name_pinyin LIKE '%'||$4||'%' OR s.name_initials LIKE '%'||$4||'%'))
+                OR EXISTS(SELECT 1 FROM stock_tags t WHERE t.stock_code=d.stock_code AND t.tag_name LIKE $3))
+            ORDER BY d.stock_code,d.trade_date DESC""", industry, only_watch, f"%{q}%", pinyin_query)
     items = [dict(row) for row in rows]
     # 顶部统计必须基于完整命中集合。若先按某一侧排序并 LIMIT，选择
     # “卖出纪律”时前 200 条通常全是退出信号，会把买入/减仓错误显示为 0。
@@ -752,6 +752,9 @@ async def radar(side: str = "all", level: str = "", industry: str = "", q: str =
         "reduce": sum(item["sell_level"] == "减仓" for item in items),
         "exit": sum(item["sell_level"] == "退出" for item in items),
     }
+    # 统计卡是全量摘要；level 只负责筛选下方列表，不能反向改变其他统计数。
+    if level:
+        items = [item for item in items if item["buy_level"] == level or item["sell_level"] == level]
     if side == "buy": items.sort(key=lambda x: number(x["buy_score"]), reverse=True)
     elif side == "sell": items.sort(key=lambda x: number(x["sell_score"]), reverse=True)
     else: items.sort(key=lambda x: max(number(x["buy_score"]), number(x["sell_score"])), reverse=True)
