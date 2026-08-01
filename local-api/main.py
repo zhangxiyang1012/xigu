@@ -695,16 +695,18 @@ async def radar(side: str = "all", level: str = "", industry: str = "", limit: i
             WHERE ($1='' OR s.industry_name=$1) AND ($2='' OR d.buy_level=$2 OR d.sell_level=$2)
             ORDER BY d.stock_code,d.trade_date DESC""", industry, level)
     items = [dict(row) for row in rows]
-    if side == "buy": items.sort(key=lambda x: number(x["buy_score"]), reverse=True)
-    elif side == "sell": items.sort(key=lambda x: number(x["sell_score"]), reverse=True)
-    else: items.sort(key=lambda x: max(number(x["buy_score"]), number(x["sell_score"])), reverse=True)
-    items = items[:limit]
+    # 顶部统计必须基于完整命中集合。若先按某一侧排序并 LIMIT，选择
+    # “卖出纪律”时前 200 条通常全是退出信号，会把买入/减仓错误显示为 0。
     summary = {
         "buy_confirmed": sum(item["buy_level"] == "买入确认" for item in items),
         "candidates": sum(item["buy_level"] == "候选" for item in items),
         "reduce": sum(item["sell_level"] == "减仓" for item in items),
         "exit": sum(item["sell_level"] == "退出" for item in items),
     }
+    if side == "buy": items.sort(key=lambda x: number(x["buy_score"]), reverse=True)
+    elif side == "sell": items.sort(key=lambda x: number(x["sell_score"]), reverse=True)
+    else: items.sort(key=lambda x: max(number(x["buy_score"]), number(x["sell_score"])), reverse=True)
+    items = items[:limit]
     return {"side": side, "summary": summary, "signals": items}
 
 
