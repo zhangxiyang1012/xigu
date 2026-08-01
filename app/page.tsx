@@ -593,6 +593,7 @@ export default function Home() {
           change: latest.change,
           volume: latest.volume,
           amount: latest.amount,
+          ...(Array.isArray(d.tags) ? { tags: d.tags } : {}),
         };
         setSelected((current) =>
           current.code === selected.code ? { ...current, ...latestQuote } : current,

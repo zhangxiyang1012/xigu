@@ -346,6 +346,30 @@ async def search(q: str, tags: str = "", sort: str = "desc"):
     selected_tags = [tag for tag in tags.split(",") if tag]
     order = "change ASC,s.code" if sort == "asc" else "change DESC,s.code"
     pinyin_query = re.sub(r"[^a-z0-9]", "", q.lower())
+    # 精确或小范围搜索时先刷新行情与系统标签，避免列表仍展示旧快照，
+    # 而用户点击个股后才看到新交易日的数据。限制为 10 只，防止宽泛
+    # 关键词触发大量外部行情请求。
+    async with pool.acquire() as connection:
+        candidates = await connection.fetch(
+            """
+            SELECT s.code
+            FROM stocks s
+            WHERE s.code LIKE $1 OR s.name LIKE $1
+              OR ($2 <> '' AND (
+                s.name_pinyin LIKE '%' || $2 || '%'
+                OR s.name_initials LIKE '%' || $2 || '%'
+              ))
+            ORDER BY s.code
+            LIMIT 11
+            """,
+            f"%{q}%",
+            pinyin_query,
+        )
+    if 0 < len(candidates) <= 10:
+        await asyncio.gather(
+            *(history(row["code"]) for row in candidates),
+            return_exceptions=True,
+        )
     async with pool.acquire() as connection:
         rows = await connection.fetch(
             f"""
@@ -462,6 +486,7 @@ async def history(code: str):
         )
     if not parsed:
         raise HTTPException(502, "历史行情暂时不可用")
+    refreshed_tags = []
     async with pool.acquire() as connection, connection.transaction():
         await connection.execute(
             """
@@ -502,7 +527,19 @@ async def history(code: str):
             ],
         )
         await refresh_one_stock_tags(connection, code)
-    return {"source": "本地PostgreSQL + 腾讯证券", "rows": parsed}
+        refreshed_tags = await connection.fetch(
+            """
+            SELECT tag_name FROM stock_tags
+            WHERE stock_code=$1
+            ORDER BY category,tag_name
+            """,
+            code,
+        )
+    return {
+        "source": "本地PostgreSQL + 腾讯证券",
+        "rows": parsed,
+        "tags": [row["tag_name"] for row in refreshed_tags],
+    }
 
 
 @app.get("/api/industries")
