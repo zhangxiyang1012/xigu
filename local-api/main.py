@@ -202,6 +202,12 @@ class HistoryPayload(BaseModel):
 class IndustryImportPayload(BaseModel):
     items: list[dict]
 
+class PositionPayload(BaseModel):
+    code: str
+    quantity: float | None = None
+    cost_price: float | None = None
+    note: str | None = None
+
 
 @asynccontextmanager
 async def lifespan(app):
@@ -220,7 +226,7 @@ app = FastAPI(title="析股本地行情API", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=os.getenv("CORS_ORIGINS", "http://localhost:3000").split(","),
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "DELETE"],
     allow_headers=["*"],
 )
 
@@ -680,7 +686,7 @@ async def discipline_rules():
 
 
 @app.get("/api/radar")
-async def radar(side: str = "all", level: str = "", industry: str = "", limit: int = 100):
+async def radar(side: str = "all", level: str = "", industry: str = "", only_watch: bool = False, limit: int = 100):
     limit = min(300, max(1, limit))
     async with pool.acquire() as connection:
         rows = await connection.fetch(
@@ -693,7 +699,8 @@ async def radar(side: str = "all", level: str = "", industry: str = "", limit: i
             FROM stock_discipline_signals d JOIN stocks s ON s.code=d.stock_code
             LEFT JOIN daily_quotes q ON q.stock_code=d.stock_code AND q.trade_date=d.trade_date
             WHERE ($1='' OR s.industry_name=$1) AND ($2='' OR d.buy_level=$2 OR d.sell_level=$2)
-            ORDER BY d.stock_code,d.trade_date DESC""", industry, level)
+              AND (NOT $3 OR EXISTS(SELECT 1 FROM watchlist w WHERE w.stock_code=d.stock_code))
+            ORDER BY d.stock_code,d.trade_date DESC""", industry, level, only_watch)
     items = [dict(row) for row in rows]
     # 顶部统计必须基于完整命中集合。若先按某一侧排序并 LIMIT，选择
     # “卖出纪律”时前 200 条通常全是退出信号，会把买入/减仓错误显示为 0。
@@ -708,6 +715,60 @@ async def radar(side: str = "all", level: str = "", industry: str = "", limit: i
     else: items.sort(key=lambda x: max(number(x["buy_score"]), number(x["sell_score"])), reverse=True)
     items = items[:limit]
     return {"side": side, "summary": summary, "signals": items}
+
+
+@app.get("/api/watchlist")
+async def get_watchlist():
+    async with pool.acquire() as connection:
+        rows = await connection.fetch("SELECT stock_code AS code,created_at FROM watchlist ORDER BY created_at DESC")
+    return {"stocks": [dict(row) for row in rows]}
+
+
+@app.post("/api/watchlist/{code}")
+async def add_watchlist(code: str):
+    if len(code) != 6 or not code.isdigit(): raise HTTPException(400, "股票代码无效")
+    async with pool.acquire() as connection:
+        result = await connection.execute("INSERT INTO watchlist(stock_code) VALUES($1) ON CONFLICT DO NOTHING", code)
+    return {"code": code, "watched": True, "result": result}
+
+
+@app.delete("/api/watchlist/{code}")
+async def delete_watchlist(code: str):
+    async with pool.acquire() as connection:
+        await connection.execute("DELETE FROM watchlist WHERE stock_code=$1", code)
+    return {"code": code, "watched": False}
+
+
+@app.get("/api/portfolio")
+async def get_portfolio():
+    async with pool.acquire() as connection:
+        rows = await connection.fetch("""SELECT p.stock_code AS code,s.name,s.market,s.industry_name,
+          p.quantity,p.cost_price,p.note,d.trade_date,d.close AS price,q.change_pct AS change,
+          d.buy_score,d.sell_score,d.buy_level,d.sell_level,d.buy_model,d.buy_signals,d.sell_signals,
+          d.blockers,d.defense_price,d.stop_atr_price
+        FROM portfolio_positions p JOIN stocks s ON s.code=p.stock_code
+        LEFT JOIN LATERAL (SELECT * FROM stock_discipline_signals WHERE stock_code=p.stock_code ORDER BY trade_date DESC LIMIT 1) d ON true
+        LEFT JOIN daily_quotes q ON q.stock_code=d.stock_code AND q.trade_date=d.trade_date
+        ORDER BY greatest(coalesce(d.sell_score,0),coalesce(d.buy_score,0)) DESC,p.created_at DESC""")
+    return {"positions": [dict(row) for row in rows]}
+
+
+@app.post("/api/portfolio")
+async def add_portfolio(payload: PositionPayload):
+    if len(payload.code) != 6 or not payload.code.isdigit(): raise HTTPException(400, "股票代码无效")
+    async with pool.acquire() as connection:
+        await connection.execute("""INSERT INTO portfolio_positions(stock_code,quantity,cost_price,note)
+          VALUES($1,$2,$3,$4) ON CONFLICT(stock_code) DO UPDATE SET quantity=coalesce(excluded.quantity,portfolio_positions.quantity),
+          cost_price=coalesce(excluded.cost_price,portfolio_positions.cost_price),note=coalesce(excluded.note,portfolio_positions.note),updated_at=now()""",
+          payload.code,payload.quantity,payload.cost_price,payload.note)
+    return {"code": payload.code, "added": True}
+
+
+@app.delete("/api/portfolio/{code}")
+async def delete_portfolio(code: str):
+    async with pool.acquire() as connection:
+        await connection.execute("DELETE FROM portfolio_positions WHERE stock_code=$1", code)
+    return {"code": code, "removed": True}
 
 
 @app.get("/api/industries")

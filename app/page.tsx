@@ -71,6 +71,7 @@ type RadarSignal = Stock & {
   defense_price:number; stop_atr_price:number; volume_ratio_20:number; pullback_days:number;
 };
 type DisciplineRule = {rule_key:string;rule_name:string;side:string;category:string;priority:number;description:string};
+type PortfolioPosition = RadarSignal & {quantity?:number;cost_price?:number;note?:string};
 const reasonText = (value: unknown) =>
   Array.isArray(value) ? value.join("；") : typeof value === "string" ? value : "";
 const fallback: Stock[] = [
@@ -542,11 +543,16 @@ export default function Home() {
     [industryLeaders,setIndustryLeaders]=useState<IndustryLeader[]>([]),
     [selectedIndustry, setSelectedIndustry] = useState(""),
     [selectedIndustries, setSelectedIndustries] = useState<string[]>([]),
-    [activeView,setActiveView]=useState<"market"|"industry"|"radar">("market"),
+    [activeView,setActiveView]=useState<"market"|"industry"|"radar"|"portfolio">("market"),
     [radarSide,setRadarSide]=useState<"all"|"buy"|"sell">("all"),
+    [radarOnlyWatch,setRadarOnlyWatch]=useState(false),
     [radarSignals,setRadarSignals]=useState<RadarSignal[]>([]),
     [radarSummary,setRadarSummary]=useState({buy_confirmed:0,candidates:0,reduce:0,exit:0}),
     [disciplineRules,setDisciplineRules]=useState<DisciplineRule[]>([]),
+    [watchCodes,setWatchCodes]=useState<string[]>([]),
+    [portfolio,setPortfolio]=useState<PortfolioPosition[]>([]),
+    [portfolioQuery,setPortfolioQuery]=useState(""),
+    [portfolioResults,setPortfolioResults]=useState<Stock[]>([]),
     [query, setQuery] = useState(""),
     [sort,setSort]=useState<"default"|"desc"|"asc">("default"),
     [market, setMarket] = useState("全部A股"),
@@ -556,7 +562,6 @@ export default function Home() {
     [historyError, setHistoryError] = useState(""),
     [historyRetry, setHistoryRetry] = useState(0),
     [error, setError] = useState(""),
-    [watch, setWatch] = useState(false),
     [lines, setLines] = useState({ ma5: true, ma10: true, ma20: true }),
     [page, setPage] = useState(1),
     [total, setTotal] = useState(0);
@@ -650,9 +655,17 @@ export default function Home() {
   useEffect(()=>{fetch(`${API_BASE}/api/tags`).then(r=>r.json()).then(d=>setAvailableTags(d.tags||[])).catch(()=>setAvailableTags([]))},[]);
   useEffect(()=>{
     if(activeView!=="radar")return;
-    fetch(`${API_BASE}/api/radar?side=${radarSide}&limit=200`).then(r=>r.json()).then(d=>{setRadarSignals(d.signals||[]);setRadarSummary(d.summary||{})}).catch(()=>setRadarSignals([]));
+    fetch(`${API_BASE}/api/radar?side=${radarSide}&only_watch=${radarOnlyWatch}&limit=200`).then(r=>r.json()).then(d=>{setRadarSignals(d.signals||[]);setRadarSummary(d.summary||{})}).catch(()=>setRadarSignals([]));
     fetch(`${API_BASE}/api/discipline-rules`).then(r=>r.json()).then(d=>setDisciplineRules(d.rules||[])).catch(()=>setDisciplineRules([]));
-  },[activeView,radarSide]);
+  },[activeView,radarSide,radarOnlyWatch]);
+  const loadWatchlist=()=>fetch(`${API_BASE}/api/watchlist`).then(r=>r.json()).then(d=>setWatchCodes((d.stocks||[]).map((x:{code:string})=>x.code))).catch(()=>setWatchCodes([]));
+  const loadPortfolio=()=>fetch(`${API_BASE}/api/portfolio`).then(r=>r.json()).then(d=>setPortfolio(d.positions||[])).catch(()=>setPortfolio([]));
+  useEffect(()=>{loadWatchlist()},[]);
+  useEffect(()=>{if(activeView==="portfolio")loadPortfolio()},[activeView]);
+  useEffect(()=>{if(!portfolioQuery.trim()){setPortfolioResults([]);return}const timer=setTimeout(()=>fetch(`${API_BASE}/api/search?q=${encodeURIComponent(portfolioQuery.trim())}`).then(r=>r.json()).then(d=>setPortfolioResults((d.stocks||[]).slice(0,8))).catch(()=>setPortfolioResults([])),250);return()=>clearTimeout(timer)},[portfolioQuery]);
+  const toggleWatch=async(code:string)=>{const watched=watchCodes.includes(code);await fetch(`${API_BASE}/api/watchlist/${code}`,{method:watched?"DELETE":"POST"});await loadWatchlist()};
+  const addPosition=async(stock:Stock)=>{await fetch(`${API_BASE}/api/portfolio`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({code:stock.code})});setPortfolioQuery("");setPortfolioResults([]);await loadPortfolio()};
+  const removePosition=async(code:string)=>{await fetch(`${API_BASE}/api/portfolio/${code}`,{method:"DELETE"});await loadPortfolio()};
   const toggleIndustry=(name:string)=>{
     if(selectedIndustries.includes(name)){
       const next=selectedIndustries.filter(item=>item!==name);
@@ -707,7 +720,7 @@ export default function Home() {
           <button className={activeView==="market"?"nav-active":""} onClick={()=>setActiveView("market")}>个股分析</button>
           <button className={activeView==="industry"?"nav-active":""} onClick={()=>setActiveView("industry")}>行业分析</button>
           <button className={activeView==="radar"?"nav-active":""} onClick={()=>setActiveView("radar")}>信号雷达</button>
-          <button>自选组合</button>
+          <button className={activeView==="portfolio"?"nav-active":""} onClick={()=>setActiveView("portfolio")}>持仓诊断</button>
         </nav>
         <div className="status">
           <i /> 免费行情 · 盘中延迟 <button className="avatar">ZX</button>
@@ -862,10 +875,10 @@ export default function Home() {
               </small>
             </div>
             <button
-              className={watch ? "watch on" : "watch"}
-              onClick={() => setWatch(!watch)}
+              className={watchCodes.includes(selected.code) ? "watch on" : "watch"}
+              onClick={() => toggleWatch(selected.code)}
             >
-              {watch ? "★ 已自选" : "☆ 加自选"}
+              {watchCodes.includes(selected.code) ? "★ 已自选" : "☆ 加自选"}
             </button>
           </div>
           <div className="metrics">
@@ -982,7 +995,7 @@ export default function Home() {
               <div><small>买入确认</small><b>{radarSummary.buy_confirmed}</b></div><div><small>买入候选</small><b>{radarSummary.candidates}</b></div>
               <div><small>减仓信号</small><b>{radarSummary.reduce}</b></div><div><small>退出信号</small><b>{radarSummary.exit}</b></div>
             </div>
-            <div className="radar-filters">{(["all","buy","sell"] as const).map(value=><button key={value} className={radarSide===value?"active":""} onClick={()=>setRadarSide(value)}>{value==="all"?"全部信号":value==="buy"?"买入纪律":"卖出纪律"}</button>)}</div>
+            <div className="radar-filters">{(["all","buy","sell"] as const).map(value=><button key={value} className={radarSide===value?"active":""} onClick={()=>setRadarSide(value)}>{value==="all"?"全部信号":value==="buy"?"买入纪律":"卖出纪律"}</button>)}<label><input type="checkbox" checked={radarOnlyWatch} onChange={e=>setRadarOnlyWatch(e.target.checked)}/> 仅看自选股票</label></div>
             <div className="radar-table">
               <div className="radar-row radar-head"><span>股票 / 行业</span><span>收盘 / 涨跌</span><span>买入纪律</span><span>卖出纪律</span><span>模型与依据</span><span>防守位</span></div>
               {radarSignals.map(item=><button className="radar-row" key={item.code} onClick={()=>{setSelected(item);setActiveView("market")}}>
@@ -996,6 +1009,16 @@ export default function Home() {
               {!radarSignals.length&&<p className="empty">尚未生成纪律信号，请先执行本地信号刷新。</p>}
             </div>
             <div className="radar-rules"><h3>当前启用规则</h3>{disciplineRules.map(rule=><div key={rule.rule_key}><b>{rule.rule_name}</b><span>{rule.description}</span><em>优先级 {rule.priority}</em></div>)}</div>
+          </div>}
+          {activeView==="portfolio"&&<div className="portfolio-panel">
+            <div className="section-title"><div><h2>持仓诊断</h2><small>将持仓股票加入本地股票池，集中查看纪律信号和匹配策略</small></div><span>{portfolio.length} 只持仓</span></div>
+            <div className="portfolio-search"><label className="search"><span>⌕</span><input value={portfolioQuery} onChange={e=>setPortfolioQuery(e.target.value)} placeholder="搜索股票名称 / 代码 / 拼音并加入持仓"/></label>
+              {!!portfolioResults.length&&<div className="portfolio-search-results">{portfolioResults.map(stock=><button key={stock.code} onClick={()=>addPosition(stock)}><span><b>{stock.name}</b><small>{stock.code} · {stock.industry_name||stock.market}</small></span><strong>＋ 加入持仓</strong></button>)}</div>}
+            </div>
+            <div className="portfolio-list"><div className="portfolio-row portfolio-head"><span>持仓股票</span><span>价格 / 涨跌</span><span>买入信号</span><span>卖出信号</span><span>匹配策略与依据</span><span>操作</span></div>
+              {portfolio.map(item=><div className="portfolio-row" key={item.code}><button className="portfolio-stock" onClick={()=>{setSelected(item);setActiveView("market")}}><b>{item.name}</b><small>{item.code} · {item.industry_name||"未分类"}</small></button><span><b>{Number(item.price||0).toFixed(2)}</b><small className={Number(item.change)<0?"trend-down":"trend-up"}>{Number(item.change)>0?"+":""}{Number(item.change||0).toFixed(2)}%</small></span><span><strong className={item.buy_level==="禁买"?"level-block":"level-buy"}>{item.buy_level||"待计算"}</strong><small>评分 {Number(item.buy_score||0).toFixed(0)}</small></span><span><strong className={item.sell_level==="退出"?"level-exit":""}>{item.sell_level||"待计算"}</strong><small>评分 {Number(item.sell_score||0).toFixed(0)}</small></span><span><b>{item.buy_model||"无匹配模型"}</b><small>{[...(item.buy_signals||[]),...(item.sell_signals||[]),...(item.blockers||[])].slice(0,3).join("；")||"暂无强信号"}</small></span><button className="portfolio-remove" onClick={()=>removePosition(item.code)}>移出</button></div>)}
+              {!portfolio.length&&<p className="empty">持仓股票池为空，请使用上方搜索加入股票。</p>}
+            </div>
           </div>}
           {activeView==="market"&&<div className="lower">
             <div className="signal-log">
