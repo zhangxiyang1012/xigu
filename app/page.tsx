@@ -519,6 +519,11 @@ export default function Home() {
     [portfolioQuery,setPortfolioQuery]=useState(""),
     [portfolioResults,setPortfolioResults]=useState<Stock[]>([]),
     [backtestData,setBacktestData]=useState<BacktestData>({summaries:[],trades:{},strategies:[],events:[]}),
+    [backtestQuery,setBacktestQuery]=useState(""),
+    [backtestResults,setBacktestResults]=useState<Stock[]>([]),
+    [backtestStocks,setBacktestStocks]=useState<Stock[]>([]),
+    [backtestRunning,setBacktestRunning]=useState(false),
+    [backtestError,setBacktestError]=useState(""),
     [positionModel,setPositionModel]=useState<PositionModel>({positions:[]}),
     [stockAnalysis,setStockAnalysis]=useState<StockAnalysis>({}),
     [analysisLoading,setAnalysisLoading]=useState(false),
@@ -633,11 +638,24 @@ export default function Home() {
   useEffect(()=>{loadWatchlist()},[]);
   useEffect(()=>{if(activeView==="portfolio"){loadPortfolio();fetch(`${API_BASE}/api/position-model`).then(r=>r.json()).then(setPositionModel).catch(()=>setPositionModel({positions:[]}))}},[activeView]);
   useEffect(()=>{if(activeView==="backtest")fetch(`${API_BASE}/api/backtest/latest`).then(r=>r.json()).then(d=>setBacktestData(d)).catch(()=>setBacktestData({summaries:[],trades:{},strategies:[],events:[]}))},[activeView]);
+  useEffect(()=>{if(activeView!=="backtest"||!backtestQuery.trim()){setBacktestResults([]);return}const timer=setTimeout(()=>fetch(`${API_BASE}/api/search?q=${encodeURIComponent(backtestQuery.trim())}`).then(r=>r.json()).then(d=>setBacktestResults((d.stocks||[]).filter((stock:Stock)=>!backtestStocks.some(item=>item.code===stock.code)).slice(0,10))).catch(()=>setBacktestResults([])),250);return()=>clearTimeout(timer)},[activeView,backtestQuery,backtestStocks]);
   useEffect(()=>{if(!portfolioQuery.trim()){setPortfolioResults([]);return}const timer=setTimeout(()=>fetch(`${API_BASE}/api/search?q=${encodeURIComponent(portfolioQuery.trim())}`).then(r=>r.json()).then(d=>setPortfolioResults((d.stocks||[]).slice(0,8))).catch(()=>setPortfolioResults([])),250);return()=>clearTimeout(timer)},[portfolioQuery]);
   useEffect(()=>{const controller=new AbortController();setAnalysisLoading(true);fetch(`${API_BASE}/api/stock-analysis?code=${selected.code}`,{signal:controller.signal}).then(r=>r.json()).then(d=>setStockAnalysis(d||{})).catch(e=>{if(e.name!=="AbortError")setStockAnalysis({})}).finally(()=>{if(!controller.signal.aborted)setAnalysisLoading(false)});return()=>controller.abort()},[selected.code]);
   const toggleWatch=async(code:string)=>{const watched=watchCodes.includes(code);await fetch(`${API_BASE}/api/watchlist/${code}`,{method:watched?"DELETE":"POST"});await loadWatchlist()};
   const addPosition=async(stock:Stock)=>{await fetch(`${API_BASE}/api/portfolio`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({code:stock.code})});setPortfolioQuery("");setPortfolioResults([]);await loadPortfolio()};
   const removePosition=async(code:string)=>{await fetch(`${API_BASE}/api/portfolio/${code}`,{method:"DELETE"});await loadPortfolio()};
+  const runSelectedBacktest=async()=>{
+    if(!backtestStocks.length)return;
+    setBacktestRunning(true);setBacktestError("");
+    try{
+      const response=await fetch(`${API_BASE}/api/backtest/run`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({stock_codes:backtestStocks.map(stock=>stock.code)})});
+      const result=await response.json();
+      if(!response.ok)throw Error(result.detail||"回测执行失败");
+      const latest=await fetch(`${API_BASE}/api/backtest/latest`).then(r=>r.json());
+      setBacktestData(latest);
+    }catch(error){setBacktestError(error instanceof Error?error.message:"回测执行失败")}
+    finally{setBacktestRunning(false)}
+  };
   const toggleIndustry=(name:string)=>{
     if(selectedIndustries.includes(name)){
       const next=selectedIndustries.filter(item=>item!==name);
@@ -1024,8 +1042,15 @@ export default function Home() {
           </div>}
           {activeView==="backtest"&&<div className="backtest-panel">
             <div className="section-title"><div><h2>三年交易纪律回测</h2><small>历史当日信号 → 下一交易日开盘模拟成交 → 多周期有效率评估</small></div><span>{backtestData.run?`${backtestData.run.start_date} 至 ${backtestData.run.end_date}`:"尚未运行"}</span></div>
+            <div className="backtest-selector">
+              <div className="backtest-search-wrap"><label className="backtest-search"><span>⌕</span><input value={backtestQuery} onChange={event=>setBacktestQuery(event.target.value)} placeholder="搜索股票名称 / 代码 / 拼音，支持多选"/>{backtestQuery&&<button onClick={()=>setBacktestQuery("")} aria-label="清空搜索">×</button>}</label>{backtestResults.length>0&&<div className="backtest-search-results">{backtestResults.map(stock=><button key={stock.code} onClick={()=>{setBacktestStocks(current=>[...current,stock]);setBacktestQuery("");setBacktestResults([])}}><b>{stock.name}</b><span>{stock.code} · {stock.industry_name||stock.market}</span><em>＋ 加入回测</em></button>)}</div>}</div>
+              <button className="backtest-run" disabled={!backtestStocks.length||backtestRunning} onClick={runSelectedBacktest}>{backtestRunning?"正在回测…":`回测选中股票（${backtestStocks.length}）`}</button>
+              {!!backtestStocks.length&&<button className="backtest-clear" disabled={backtestRunning} onClick={()=>setBacktestStocks([])}>清空选择</button>}
+              <div className="backtest-stock-chips">{backtestStocks.map(stock=><button key={stock.code} disabled={backtestRunning} onClick={()=>setBacktestStocks(current=>current.filter(item=>item.code!==stock.code))}><b>{stock.name}</b><small>{stock.code}</small><span>×</span></button>)}</div>
+              {backtestError&&<p className="backtest-error">{backtestError}</p>}
+            </div>
             {backtestData.run?<>
-              <div className="backtest-notes"><b>无未来数据泄漏</b><span>买入：仅“买入确认”且无阻断项；卖出：减仓/退出、跌破买入防守位、时间止损或移动止盈；已计佣金、印花税和滑点。</span><em>{backtestData.run.stock_count}只股票 · {backtestData.run.event_count}个信号 · {backtestData.run.trade_count}笔交易</em></div>
+              <div className="backtest-notes"><b>{backtestData.run.parameters?.scope==="selected"?"选股回测":"全市场回测"} · 无未来数据泄漏</b><span>买入：仅“买入确认”且无阻断项；卖出：减仓/退出、跌破买入防守位、时间止损或移动止盈；已计佣金、印花税和滑点。</span><em>{backtestData.run.stock_count}只股票 · {backtestData.run.event_count}个信号 · {backtestData.run.trade_count}笔交易</em></div>
               <div className="backtest-cards"><div><small>已闭合交易</small><b>{Number(backtestData.trades.closed_count||0).toFixed(0)}</b></div><div><small>平均收益</small><b className={Number(backtestData.trades.avg_return_pct)<0?"trend-down":"trend-up"}>{Number(backtestData.trades.avg_return_pct||0).toFixed(2)}%</b></div><div><small>交易胜率</small><b>{Number(backtestData.trades.win_rate_pct||0).toFixed(1)}%</b></div><div><small>平均持有</small><b>{Number(backtestData.trades.avg_holding_days||0).toFixed(1)}日</b></div><div><small>最佳 / 最差</small><b>{Number(backtestData.trades.best_return_pct||0).toFixed(1)}% / {Number(backtestData.trades.worst_return_pct||0).toFixed(1)}%</b></div></div>
               <div className="backtest-section"><h3>买入与卖出信号的多周期有效率</h3><p>买入收益为信号后实际涨跌；卖出收益为“规避收益”，正数表示卖出后股价下跌、该卖出有效。</p><div className="backtest-horizon"><div className="backtest-horizon-row head"><b>周期</b><span>买入平均收益</span><span>买入胜率</span><span>买入样本</span><span>卖出规避收益</span><span>卖出有效率</span><span>卖出样本</span></div>{["1月","3月","半年","1年","2年","3年"].map(horizon=>{const buy=backtestData.summaries.find(x=>x.side==="buy"&&x.horizon===horizon),sell=backtestData.summaries.find(x=>x.side==="sell"&&x.horizon===horizon);return <div className="backtest-horizon-row" key={horizon}><b>{horizon}</b><span className={Number(buy?.avg_return_pct)<0?"trend-down":"trend-up"}>{buy?`${Number(buy.avg_return_pct).toFixed(2)}%`:"—"}</span><span>{buy?`${Number(buy.win_rate_pct).toFixed(1)}%`:"—"}</span><span>{buy?.sample_count||0}</span><span className={Number(sell?.avg_return_pct)<0?"trend-down":"trend-up"}>{sell?`${Number(sell.avg_return_pct).toFixed(2)}%`:"—"}</span><span>{sell?`${Number(sell.win_rate_pct).toFixed(1)}%`:"—"}</span><span>{sell?.sample_count||0}</span></div>})}</div></div>
               <div className="backtest-columns"><section><h3>策略分组表现</h3>{backtestData.strategies.slice(0,12).map(item=><div className="strategy-result" key={`${item.side}-${item.strategy}`}><b>{item.side==="buy"?"买":"卖"} · {item.strategy}</b><span>{item.samples}笔</span><em className={Number(item.avg_return_pct)<0?"trend-down":"trend-up"}>交易收益 {Number(item.avg_return_pct).toFixed(2)}% · 胜率 {Number(item.win_rate_pct).toFixed(1)}%</em></div>)}</section><section><h3>最近模拟节点</h3>{backtestData.events.slice(0,20).map(item=><div className="backtest-event" key={`${item.code}-${item.side}-${item.signal_date}`}><b className={item.side==="buy"?"trend-up":"trend-down"}>{item.side==="buy"?"买入":"卖出"}</b><span>{item.name} {item.code}</span><em>{item.signal_date} → {item.execution_date} · {item.strategy_name}</em><small>{(item.matched_rules||[]).join("；")}</small></div>)}</section></div>

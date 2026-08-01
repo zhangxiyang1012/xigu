@@ -90,10 +90,12 @@ def forward_returns(rows, execution_index, side):
     return values
 
 
-async def run(connection):
+async def run(connection, stock_codes=None):
     end_date = await connection.fetchval("SELECT max(trade_date) FROM daily_quotes")
     start_date = end_date - timedelta(days=1095)
-    await refresh_industries(connection, history_days=1210, output_days=1110)
+    industry_range = await connection.fetchrow("SELECT min(trade_date) first_date,max(trade_date) last_date FROM industry_daily_metrics")
+    if not industry_range or not industry_range["first_date"] or industry_range["first_date"] > start_date or industry_range["last_date"] < end_date:
+        await refresh_industries(connection, history_days=1210, output_days=1110)
     industry_rows = await connection.fetch("""SELECT industry_name,trade_date,risk_level,
       rank() OVER(PARTITION BY trade_date ORDER BY rotation_score DESC) rank
       FROM industry_daily_metrics WHERE trade_date >= $1""", start_date - timedelta(days=90))
@@ -102,9 +104,13 @@ async def run(connection):
       VALUES($1,$2,$3::jsonb) RETURNING id""", start_date, end_date, json.dumps({
         "entry": "买入确认后下一交易日开盘", "exit": "减仓/退出/硬止损/时间止损后下一交易日开盘",
         "horizons": HORIZONS, "buy_cost": BUY_COST, "sell_cost": SELL_COST,
+        "scope": "selected" if stock_codes else "all", "stock_codes": stock_codes or [],
         "unavailable_rules": ["上市不足120日（上市日期缺失）", "市场系统性风险（尚无历史市场环境表）"]
       }, ensure_ascii=False))
-    stocks = await connection.fetch("SELECT code,name,industry_name FROM stocks ORDER BY code")
+    if stock_codes:
+        stocks = await connection.fetch("SELECT code,name,industry_name FROM stocks WHERE code::text=ANY($1::text[]) ORDER BY code", stock_codes)
+    else:
+        stocks = await connection.fetch("SELECT code,name,industry_name FROM stocks ORDER BY code")
     events, trades = [], []
     try:
         for stock_no, stock in enumerate(stocks, 1):

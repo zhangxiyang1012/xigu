@@ -210,6 +210,10 @@ class PositionPayload(BaseModel):
     note: str | None = None
 
 
+class BacktestPayload(BaseModel):
+    stock_codes: list[str]
+
+
 @asynccontextmanager
 async def lifespan(app):
     await init_db()
@@ -757,10 +761,18 @@ async def latest_backtest():
 
 
 @app.post("/api/backtest/run")
-async def start_backtest():
+async def start_backtest(payload: BacktestPayload):
     from backtest_strategies import run
+    stock_codes = list(dict.fromkeys(code.strip() for code in payload.stock_codes if re.fullmatch(r"\d{6}", code.strip())))
+    if not stock_codes:
+        raise HTTPException(400, "请至少选择一只股票")
+    if len(stock_codes) > 50:
+        raise HTTPException(400, "单次最多回测50只股票")
     async with pool.acquire() as connection:
-        run_id, events, trades = await run(connection)
+        valid_count = await connection.fetchval("SELECT count(*) FROM stocks WHERE code::text=ANY($1::text[])", stock_codes)
+        if valid_count != len(stock_codes):
+            raise HTTPException(400, "选择中包含无效股票代码")
+        run_id, events, trades = await run(connection, stock_codes)
     return {"run_id": run_id, "events": events, "trades": trades}
 
 
