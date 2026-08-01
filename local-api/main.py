@@ -133,6 +133,63 @@ async def persist_snapshot(items: list[dict]):
             )
 
 
+async def refresh_latest_quotes(codes: list[str]) -> int:
+    """批量刷新指定股票的最新行情，并基于最新交易日重算标签。"""
+    if not codes:
+        return 0
+    symbols = [
+        ("sh" if code.startswith("6") else
+         "bj" if code.startswith(("4", "8", "9")) else "sz") + code
+        for code in codes
+    ]
+    items: list[dict] = []
+    shanghai = ZoneInfo("Asia/Shanghai")
+    async with httpx.AsyncClient(
+        timeout=20,
+        headers={"Referer": "https://gu.qq.com/", "User-Agent": "Mozilla/5.0"},
+    ) as client:
+        for start in range(0, len(symbols), 80):
+            response = await client.get(
+                f"https://qt.gtimg.cn/q={','.join(symbols[start:start + 80])}"
+            )
+            response.raise_for_status()
+            for line in response.content.decode("gb18030", errors="replace").splitlines():
+                match = re.match(r'v_[^=]+="(.*)";', line.strip())
+                if not match:
+                    continue
+                values = match.group(1).split("~")
+                if len(values) < 39 or not values[2].isdigit() or not values[30]:
+                    continue
+                try:
+                    traded_at = datetime.strptime(values[30], "%Y%m%d%H%M%S").replace(
+                        tzinfo=shanghai
+                    )
+                    amount_parts = values[35].split("/")
+                    items.append({
+                        "f12": values[2],
+                        "f14": values[1],
+                        "f2": float(values[3]),
+                        "f3": float(values[32]),
+                        "f5": int(float(values[36])),
+                        "f6": float(amount_parts[2]) if len(amount_parts) > 2 else 0,
+                        "f8": float(values[38]),
+                        "f17": float(values[5]),
+                        "f15": float(values[33]),
+                        "f16": float(values[34]),
+                        "f124": int(traded_at.timestamp()),
+                    })
+                except (ValueError, IndexError):
+                    continue
+    if not items:
+        return 0
+    await persist_snapshot(items)
+    refreshed_codes = {str(item["f12"]) for item in items}
+    async with pool.acquire() as connection, connection.transaction():
+        for code in refreshed_codes:
+            await refresh_one_stock_tags(connection, code)
+    return len(refreshed_codes)
+
+
 class SnapshotPayload(BaseModel):
     items: list[dict]
 
@@ -332,6 +389,62 @@ async def stocks(
             selected_tags,
             (page - 1) * 100,
         )
+    page_codes = [row["code"] for row in rows]
+    if page_codes:
+        try:
+            await refresh_latest_quotes(page_codes)
+        except Exception:
+            # 免费行情短暂不可用时保留数据库中的最近有效结果。
+            pass
+        async with pool.acquire() as connection:
+            total = await connection.fetchval(
+                """
+                SELECT count(*) FROM stocks s
+                WHERE cardinality($1::text[]) = 0 OR (
+                  SELECT count(DISTINCT tag_key) FROM stock_tags
+                  WHERE stock_code=s.code AND tag_key=ANY($1::text[])
+                ) = cardinality($1::text[])
+                """,
+                selected_tags,
+            )
+            rows = await connection.fetch(
+                f"""
+                SELECT s.code,s.name,s.market,s.industry_name,
+                  coalesce(q.close,0) price,coalesce(q.change_pct,0) change,
+                  coalesce(q.volume,0) volume,coalesce(q.amount,0) amount,
+                  coalesce(t.tags,ARRAY[]::text[]) tags,
+                  coalesce(t.tag_keys,ARRAY[]::text[]) tag_keys,
+                  ir.phase AS industry_phase,ir.risk_level AS industry_risk,
+                  ir.risk_score AS industry_risk_score
+                FROM stocks s
+                LEFT JOIN LATERAL (
+                  SELECT close,change_pct,volume,amount
+                  FROM daily_quotes
+                  WHERE stock_code=s.code
+                  ORDER BY trade_date DESC LIMIT 1
+                ) q ON true
+                LEFT JOIN LATERAL (
+                  SELECT array_agg(tag_name ORDER BY category,tag_name) tags,
+                    array_agg(tag_key ORDER BY category,tag_name) tag_keys
+                  FROM stock_tags WHERE stock_code=s.code
+                ) t ON true
+                LEFT JOIN LATERAL (
+                  SELECT phase,risk_level,risk_score
+                  FROM industry_daily_metrics
+                  WHERE industry_name=s.industry_name
+                  ORDER BY trade_date DESC LIMIT 1
+                ) ir ON true
+                WHERE s.code=ANY($1::text[]) AND (
+                  cardinality($2::text[]) = 0 OR (
+                    SELECT count(DISTINCT tag_key) FROM stock_tags
+                    WHERE stock_code=s.code AND tag_key=ANY($2::text[])
+                  ) = cardinality($2::text[])
+                )
+                ORDER BY {order}
+                """,
+                page_codes,
+                selected_tags,
+            )
     return {
         "source": "本地PostgreSQL",
         "page": page,
