@@ -142,13 +142,24 @@ CREATE TABLE IF NOT EXISTS stock_fundamentals (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 INSERT INTO discipline_rules(rule_key,rule_name,side,category,priority,description,parameters) VALUES
-('B_MAIN_PULLBACK','主线缩量回调','buy','entry',90,'行业非高风险、股价位于MA20上方，连续2至5日缩量回调并出现拐点确认。','{"pullbackDays":[2,5],"maxVolumeRatio20":0.8,"requiresMA20":true}'::jsonb),
-('B_ACTIVE_SECOND','活跃股二次参与','buy','entry',80,'近20日出现涨停或连续放量长阳，回调后重新站上MA5。','{"limitPct":9.8,"longBarPct":4,"lookback":20}'::jsonb),
-('B_LEADER_RECOVERY','核心股深跌修复','buy','entry',70,'60日高点回撤15%至30%，重新站上MA5且量能恢复。','{"drawdownMin":-30,"drawdownMax":-15}'::jsonb),
-('X_INDUSTRY_HIGH_RISK','行业高风险禁买','block','risk',100,'行业轮动风险为高时，禁止生成买入确认。','{}'::jsonb),
-('S_BREAK_MA10','跌破MA10减仓','sell','exit',70,'收盘跌破MA10且成交量不萎缩，进入减仓预警。','{"minVolumeRatio20":1}'::jsonb),
-('S_BREAK_MA20','放量跌破MA20退出','sell','exit',100,'收盘跌破MA20且成交量高于20日均量，触发退出信号。','{"minVolumeRatio20":1}'::jsonb),
-('S_LIMIT_DOWN','跌停风险退出','sell','exit',100,'当日跌幅小于等于-9.8%，触发高优先级退出。','{"limitPct":-9.8}'::jsonb)
+('B0_EXCLUSION','B0 基础排除','buy','gate',100,'ST/退市整理、上市不足120日、近20日均成交额低于1亿元、连续一字板、放量破位未止跌、行业退潮或系统性风险时不开新仓。','{}'::jsonb),
+('B1_MARKET','B1 市场环境门槛','buy','gate',95,'市场不得处于系统性风险，主线核心股不可批量破位；大级别下降期只允许小仓位反弹策略。','{}'::jsonb),
+('B2_INDUSTRY','B2 行业门槛','buy','gate',90,'原则上只做行业综合强度前3名，并要求趋势、广度、龙头相对强度和回调量能同时健康。','{"maxRank":3}'::jsonb),
+('B3_CORE','B3 核心个股门槛','buy','selection',85,'优先行业核心股：相对行业强、MA20向上、站上MA20，且MA5≥MA10≥MA20或MA5上穿MA10。','{}'::jsonb),
+('B4A_PULLBACK','B4-A 主线强势股缩量回调','buy','entry',80,'明确上升趋势中回调2-5日、量能递减至20日均量70%以下、振幅≤5%、不破MA20；至少两个拐点条件确认后才买入。','{"pullbackDays":[2,5],"maxVolumeRatio20":0.7,"maxAmplitudePct":5}'::jsonb),
+('B4B_RECOVERY','B4-B 主线龙头深跌修复','buy','entry',75,'仅限历史验证的行业核心股；高点回撤15%-30%，出现止跌结构，行业未系统性下降，重新站上MA5且量能恢复。','{"drawdownMin":-30,"drawdownMax":-15}'::jsonb),
+('B4C_ACTIVE','B4-C 活跃股二次参与','buy','entry',70,'近期出现可成交放量涨停或连续两根以上放量中长阳；等待5-10日缩量调整、支撑确认和再次转强。','{"limitPct":9.8,"cycleDays":[5,10]}'::jsonb),
+('B5_NO_CHASE','B5 禁止追高','buy','risk',65,'上涨5-10日、反弹周期后段放量、高位巨量滞涨、长上影或破位未收复时禁止开新仓。','{}'::jsonb),
+('B6_POSITION','B6 仓位纪律','buy','risk',60,'单笔风险0.5%-1%，单股≤15%、激进策略≤8%、单行业≤35%；无法预先定义防守位不得买入。','{}'::jsonb),
+('S0_HARD_STOP','S0 硬止损','sell','exit',100,'跌破预设防守位、放量跌破MA20/平台、MA20次日未收回、浮亏达到1-1.5ATR或活跃股破位时退出。','{"atrStop":[1,1.5]}'::jsonb),
+('S1_TREND','S1 趋势减仓与退出','sell','exit',90,'放量跌破MA10先减半；放量跌破MA20、反弹无量再破前低或破位反弹未收复时退出。','{}'::jsonb),
+('S2_INDUSTRY','S2 行业与市场退出','sell','risk',80,'行业跌出前3并连续3日走弱、多只核心股同时破位或风险向市场扩散时，减仓或退出。','{"weakDays":3}'::jsonb),
+('S3_PROFIT','S3 止盈纪律','sell','profit',70,'盈利8%-12%先兑现约1/3；剩余仓位沿MA5/MA10移动止盈，高位放量滞涨、长上影或顶背离时分批退出。','{"profitPct":[8,12]}'::jsonb),
+('S4_TIME','S4 时间止损','sell','time',60,'买入超过10个交易日仍未走强，或预期的随后转强未出现时，减仓或退出并取消原交易逻辑。','{"maxDays":10}'::jsonb)
 ON CONFLICT(rule_key) DO UPDATE SET rule_name=excluded.rule_name,side=excluded.side,
 category=excluded.category,priority=excluded.priority,description=excluded.description,
 parameters=excluded.parameters,updated_at=now();
+UPDATE discipline_rules SET enabled = rule_key IN (
+  'B0_EXCLUSION','B1_MARKET','B2_INDUSTRY','B3_CORE','B4A_PULLBACK','B4B_RECOVERY','B4C_ACTIVE',
+  'B5_NO_CHASE','B6_POSITION','S0_HARD_STOP','S1_TREND','S2_INDUSTRY','S3_PROFIT','S4_TIME'
+);

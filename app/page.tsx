@@ -551,6 +551,7 @@ export default function Home() {
     [activeView,setActiveView]=useState<"market"|"industry"|"radar"|"portfolio">("market"),
     [radarSide,setRadarSide]=useState<"all"|"buy"|"sell">("all"),
     [radarQuery,setRadarQuery]=useState(""),
+    [radarLevel,setRadarLevel]=useState(""),
     [radarOnlyWatch,setRadarOnlyWatch]=useState(false),
     [radarSignals,setRadarSignals]=useState<RadarSignal[]>([]),
     [radarSummary,setRadarSummary]=useState({buy_confirmed:0,candidates:0,reduce:0,exit:0}),
@@ -663,9 +664,9 @@ export default function Home() {
   useEffect(()=>{fetch(`${API_BASE}/api/tags`).then(r=>r.json()).then(d=>setAvailableTags(d.tags||[])).catch(()=>setAvailableTags([]))},[]);
   useEffect(()=>{
     if(activeView!=="radar")return;
-    const timer=setTimeout(()=>fetch(`${API_BASE}/api/radar?side=${radarSide}&only_watch=${radarOnlyWatch}&q=${encodeURIComponent(radarQuery.trim())}&limit=200`).then(r=>r.json()).then(d=>{setRadarSignals(d.signals||[]);setRadarSummary(d.summary||{})}).catch(()=>setRadarSignals([])),250);
+    const timer=setTimeout(()=>fetch(`${API_BASE}/api/radar?side=${radarSide}&level=${encodeURIComponent(radarLevel)}&only_watch=${radarOnlyWatch}&q=${encodeURIComponent(radarQuery.trim())}&limit=200`).then(r=>r.json()).then(d=>{setRadarSignals(d.signals||[]);setRadarSummary(d.summary||{})}).catch(()=>setRadarSignals([])),250);
     return()=>clearTimeout(timer);
-  },[activeView,radarSide,radarOnlyWatch,radarQuery]);
+  },[activeView,radarSide,radarOnlyWatch,radarQuery,radarLevel]);
   useEffect(()=>{if(activeView==="radar")fetch(`${API_BASE}/api/discipline-rules`).then(r=>r.json()).then(d=>setDisciplineRules(d.rules||[])).catch(()=>setDisciplineRules([]))},[activeView]);
   const loadWatchlist=()=>fetch(`${API_BASE}/api/watchlist`).then(r=>r.json()).then(d=>setWatchCodes((d.stocks||[]).map((x:{code:string})=>x.code))).catch(()=>setWatchCodes([]));
   const loadPortfolio=()=>fetch(`${API_BASE}/api/portfolio`).then(r=>r.json()).then(d=>setPortfolio(d.positions||[])).catch(()=>setPortfolio([]));
@@ -1021,10 +1022,12 @@ export default function Home() {
             <div className="section-title"><div><h2>交易纪律信号雷达</h2><small>行情事实 → 纪律条件 → 信号评分 → 风险拦截</small></div><span>每日收盘后计算 · 仅作决策辅助</span></div>
             <div className="radar-rules radar-rules-top"><h3>买入与卖出纪律</h3><div className="radar-rule-columns"><section><b>买入纪律</b>{disciplineRules.filter(rule=>rule.side==="buy").map(rule=><p key={rule.rule_key}><strong>{rule.rule_name}</strong><span>{rule.description}</span></p>)}</section><section><b>卖出纪律</b>{disciplineRules.filter(rule=>rule.side==="sell").map(rule=><p key={rule.rule_key}><strong>{rule.rule_name}</strong><span>{rule.description}</span></p>)}</section></div></div>
             <div className="radar-summary">
-              <div><small>买入确认</small><b>{radarSummary.buy_confirmed}</b></div><div><small>买入候选</small><b>{radarSummary.candidates}</b></div>
-              <div><small>减仓信号</small><b>{radarSummary.reduce}</b></div><div><small>退出信号</small><b>{radarSummary.exit}</b></div>
+              <button className={radarLevel==="买入确认"?"active":""} onClick={()=>{setRadarLevel(v=>v==="买入确认"?"":"买入确认");setRadarSide("buy")}}><small>买入确认</small><b>{radarSummary.buy_confirmed}</b></button>
+              <button className={radarLevel==="候选"?"active":""} onClick={()=>{setRadarLevel(v=>v==="候选"?"":"候选");setRadarSide("buy")}}><small>买入候选</small><b>{radarSummary.candidates}</b></button>
+              <button className={radarLevel==="减仓"?"active":""} onClick={()=>{setRadarLevel(v=>v==="减仓"?"":"减仓");setRadarSide("sell")}}><small>减仓信号</small><b>{radarSummary.reduce}</b></button>
+              <button className={radarLevel==="退出"?"active":""} onClick={()=>{setRadarLevel(v=>v==="退出"?"":"退出");setRadarSide("sell")}}><small>退出信号</small><b>{radarSummary.exit}</b></button>
             </div>
-            <div className="radar-filters"><label className="radar-search"><span>⌕</span><input value={radarQuery} onChange={e=>setRadarQuery(e.target.value)} placeholder="搜索名称 / 代码 / 拼音 / 标签"/>{radarQuery&&<button onClick={()=>setRadarQuery("")} aria-label="清空雷达搜索">×</button>}</label>{(["all","buy","sell"] as const).map(value=><button key={value} className={radarSide===value?"active":""} onClick={()=>setRadarSide(value)}>{value==="all"?"全部信号":value==="buy"?"买入纪律":"卖出纪律"}</button>)}<label><input type="checkbox" checked={radarOnlyWatch} onChange={e=>setRadarOnlyWatch(e.target.checked)}/> 仅看自选股票</label></div>
+            <div className="radar-filters"><label className="radar-search"><span>⌕</span><input value={radarQuery} onChange={e=>setRadarQuery(e.target.value)} placeholder="搜索名称 / 代码 / 拼音 / 标签"/>{radarQuery&&<button onClick={()=>setRadarQuery("")} aria-label="清空雷达搜索">×</button>}</label>{(["all","buy","sell"] as const).map(value=><button key={value} className={radarSide===value?"active":""} onClick={()=>{setRadarSide(value);setRadarLevel("")}}>{value==="all"?"全部信号":value==="buy"?"买入纪律":"卖出纪律"}</button>)}{radarLevel&&<button className="active" onClick={()=>setRadarLevel("")}>{radarLevel} ×</button>}<label><input type="checkbox" checked={radarOnlyWatch} onChange={e=>setRadarOnlyWatch(e.target.checked)}/> 仅看自选股票</label></div>
             <div className="radar-table">
               <div className="radar-row radar-head"><span>股票 / 行业</span><span>收盘 / 涨跌</span><span>买入纪律</span><span>卖出纪律</span><span>模型与依据</span><span>防守位</span></div>
               {radarSignals.map(item=><button className="radar-row" key={item.code} onClick={()=>{setSelected(item);setActiveView("market")}}>
