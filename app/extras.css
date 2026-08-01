@@ -54,3 +54,8 @@
 @media(max-width:900px){.radar-rule-columns{grid-template-columns:1fr!important}.radar-filters{flex-wrap:wrap}.radar-search{width:100%}.radar-filters>label:last-child{margin-left:0}}
 .radar-summary>button{padding:16px 18px;border:0;border-right:1px solid var(--line);background:#fff;display:flex;justify-content:space-between;align-items:center;cursor:pointer;text-align:left}.radar-summary>button:hover{background:#f5f8f5}.radar-summary>button.active{background:#edf4f0;box-shadow:inset 0 -3px #244136}.radar-summary>button small{color:#888}.radar-summary>button b{font-size:23px}.radar-summary>div{display:none}
 .radar-filters .watch-filter{margin:0 5px!important;display:flex;align-items:center;gap:4px;white-space:nowrap}
+
+/* 阅读型模块使用更舒适的字号和行距，避免长规则说明过密。 */
+.radar-rules-top{padding:20px}.radar-rules-top h3{font-size:15px;margin-bottom:12px}.radar-rule-columns section{padding:15px 17px}.radar-rule-columns section>b{font-size:14px;margin-bottom:9px}.radar-rule-columns p{grid-template-columns:160px minmax(0,1fr);gap:14px;padding:9px 0;font-size:12px;line-height:1.6}.radar-rule-columns p strong{font-size:12px}.radar-rule-columns p span{font-size:12px;color:#666}
+.portfolio-discipline summary{padding:11px 14px;font-size:12px}.portfolio-discipline-grid section{padding:15px 17px}.portfolio-discipline-grid section>b{font-size:13px}.portfolio-discipline-grid section>small{font-size:11px}.portfolio-discipline-grid h4{font-size:11px;margin:13px 0 6px}.portfolio-discipline-grid p{font-size:12px;line-height:1.55;margin:6px 0}.position-market{font-size:12px;line-height:1.5;padding-top:12px;padding-bottom:12px}
+@media(max-width:900px){.radar-rules-top{padding:14px}.radar-rule-columns p{grid-template-columns:1fr;gap:3px}.portfolio-discipline-grid p{font-size:12px}}
