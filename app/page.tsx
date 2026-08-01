@@ -550,6 +550,7 @@ export default function Home() {
     [selectedIndustries, setSelectedIndustries] = useState<string[]>([]),
     [activeView,setActiveView]=useState<"market"|"industry"|"radar"|"portfolio">("market"),
     [radarSide,setRadarSide]=useState<"all"|"buy"|"sell">("all"),
+    [radarQuery,setRadarQuery]=useState(""),
     [radarOnlyWatch,setRadarOnlyWatch]=useState(false),
     [radarSignals,setRadarSignals]=useState<RadarSignal[]>([]),
     [radarSummary,setRadarSummary]=useState({buy_confirmed:0,candidates:0,reduce:0,exit:0}),
@@ -662,9 +663,10 @@ export default function Home() {
   useEffect(()=>{fetch(`${API_BASE}/api/tags`).then(r=>r.json()).then(d=>setAvailableTags(d.tags||[])).catch(()=>setAvailableTags([]))},[]);
   useEffect(()=>{
     if(activeView!=="radar")return;
-    fetch(`${API_BASE}/api/radar?side=${radarSide}&only_watch=${radarOnlyWatch}&limit=200`).then(r=>r.json()).then(d=>{setRadarSignals(d.signals||[]);setRadarSummary(d.summary||{})}).catch(()=>setRadarSignals([]));
-    fetch(`${API_BASE}/api/discipline-rules`).then(r=>r.json()).then(d=>setDisciplineRules(d.rules||[])).catch(()=>setDisciplineRules([]));
-  },[activeView,radarSide,radarOnlyWatch]);
+    const timer=setTimeout(()=>fetch(`${API_BASE}/api/radar?side=${radarSide}&only_watch=${radarOnlyWatch}&q=${encodeURIComponent(radarQuery.trim())}&limit=200`).then(r=>r.json()).then(d=>{setRadarSignals(d.signals||[]);setRadarSummary(d.summary||{})}).catch(()=>setRadarSignals([])),250);
+    return()=>clearTimeout(timer);
+  },[activeView,radarSide,radarOnlyWatch,radarQuery]);
+  useEffect(()=>{if(activeView==="radar")fetch(`${API_BASE}/api/discipline-rules`).then(r=>r.json()).then(d=>setDisciplineRules(d.rules||[])).catch(()=>setDisciplineRules([]))},[activeView]);
   const loadWatchlist=()=>fetch(`${API_BASE}/api/watchlist`).then(r=>r.json()).then(d=>setWatchCodes((d.stocks||[]).map((x:{code:string})=>x.code))).catch(()=>setWatchCodes([]));
   const loadPortfolio=()=>fetch(`${API_BASE}/api/portfolio`).then(r=>r.json()).then(d=>setPortfolio(d.positions||[])).catch(()=>setPortfolio([]));
   useEffect(()=>{loadWatchlist()},[]);
@@ -823,7 +825,7 @@ export default function Home() {
                   <strong className={s.change < 0 ? "trend-down" : "trend-up"}>{s.price || "—"}</strong>
                   <em className={s.change < 0 ? "trend-down" : "trend-up"}>
                     {s.change > 0 ? "+" : ""}
-                    {s.change}%
+                    {Number(s.change).toFixed(2)}%
                   </em>
                 </div>
                 <span className="signal">{s.market}</span>
@@ -1017,11 +1019,12 @@ export default function Home() {
           </div>}
           {activeView==="radar"&&<div className="radar-panel">
             <div className="section-title"><div><h2>交易纪律信号雷达</h2><small>行情事实 → 纪律条件 → 信号评分 → 风险拦截</small></div><span>每日收盘后计算 · 仅作决策辅助</span></div>
+            <div className="radar-rules radar-rules-top"><h3>买入与卖出纪律</h3><div className="radar-rule-columns"><section><b>买入纪律</b>{disciplineRules.filter(rule=>rule.side==="buy").map(rule=><p key={rule.rule_key}><strong>{rule.rule_name}</strong><span>{rule.description}</span></p>)}</section><section><b>卖出纪律</b>{disciplineRules.filter(rule=>rule.side==="sell").map(rule=><p key={rule.rule_key}><strong>{rule.rule_name}</strong><span>{rule.description}</span></p>)}</section></div></div>
             <div className="radar-summary">
               <div><small>买入确认</small><b>{radarSummary.buy_confirmed}</b></div><div><small>买入候选</small><b>{radarSummary.candidates}</b></div>
               <div><small>减仓信号</small><b>{radarSummary.reduce}</b></div><div><small>退出信号</small><b>{radarSummary.exit}</b></div>
             </div>
-            <div className="radar-filters">{(["all","buy","sell"] as const).map(value=><button key={value} className={radarSide===value?"active":""} onClick={()=>setRadarSide(value)}>{value==="all"?"全部信号":value==="buy"?"买入纪律":"卖出纪律"}</button>)}<label><input type="checkbox" checked={radarOnlyWatch} onChange={e=>setRadarOnlyWatch(e.target.checked)}/> 仅看自选股票</label></div>
+            <div className="radar-filters"><label className="radar-search"><span>⌕</span><input value={radarQuery} onChange={e=>setRadarQuery(e.target.value)} placeholder="搜索名称 / 代码 / 拼音 / 标签"/>{radarQuery&&<button onClick={()=>setRadarQuery("")} aria-label="清空雷达搜索">×</button>}</label>{(["all","buy","sell"] as const).map(value=><button key={value} className={radarSide===value?"active":""} onClick={()=>setRadarSide(value)}>{value==="all"?"全部信号":value==="buy"?"买入纪律":"卖出纪律"}</button>)}<label><input type="checkbox" checked={radarOnlyWatch} onChange={e=>setRadarOnlyWatch(e.target.checked)}/> 仅看自选股票</label></div>
             <div className="radar-table">
               <div className="radar-row radar-head"><span>股票 / 行业</span><span>收盘 / 涨跌</span><span>买入纪律</span><span>卖出纪律</span><span>模型与依据</span><span>防守位</span></div>
               {radarSignals.map(item=><button className="radar-row" key={item.code} onClick={()=>{setSelected(item);setActiveView("market")}}>
@@ -1034,7 +1037,6 @@ export default function Home() {
               </button>)}
               {!radarSignals.length&&<p className="empty">尚未生成纪律信号，请先执行本地信号刷新。</p>}
             </div>
-            <div className="radar-rules"><h3>当前启用规则</h3>{disciplineRules.map(rule=><div key={rule.rule_key}><b>{rule.rule_name}</b><span>{rule.description}</span><em>优先级 {rule.priority}</em></div>)}</div>
           </div>}
           {activeView==="portfolio"&&<div className="portfolio-panel">
             <div className="section-title"><div><h2>持仓诊断</h2><small>将持仓股票加入本地股票池，集中查看纪律信号和匹配策略</small></div><span>{portfolio.length} 只持仓</span></div>

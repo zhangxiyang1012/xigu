@@ -724,8 +724,9 @@ async def discipline_rules():
 
 
 @app.get("/api/radar")
-async def radar(side: str = "all", level: str = "", industry: str = "", only_watch: bool = False, limit: int = 100):
+async def radar(side: str = "all", level: str = "", industry: str = "", q: str = "", only_watch: bool = False, limit: int = 100):
     limit = min(300, max(1, limit))
+    pinyin_query = re.sub(r"[^a-z0-9]", "", q.lower())
     async with pool.acquire() as connection:
         rows = await connection.fetch(
             """SELECT DISTINCT ON (d.stock_code) d.stock_code AS code,s.name,s.market,s.industry_name,
@@ -738,7 +739,10 @@ async def radar(side: str = "all", level: str = "", industry: str = "", only_wat
             LEFT JOIN daily_quotes q ON q.stock_code=d.stock_code AND q.trade_date=d.trade_date
             WHERE ($1='' OR s.industry_name=$1) AND ($2='' OR d.buy_level=$2 OR d.sell_level=$2)
               AND (NOT $3 OR EXISTS(SELECT 1 FROM watchlist w WHERE w.stock_code=d.stock_code))
-            ORDER BY d.stock_code,d.trade_date DESC""", industry, level, only_watch)
+              AND ($4='' OR s.code LIKE $4 OR s.name LIKE $4
+                OR ($5<>'' AND (s.name_pinyin LIKE '%'||$5||'%' OR s.name_initials LIKE '%'||$5||'%'))
+                OR EXISTS(SELECT 1 FROM stock_tags t WHERE t.stock_code=d.stock_code AND t.tag_name LIKE $4))
+            ORDER BY d.stock_code,d.trade_date DESC""", industry, level, only_watch, f"%{q}%", pinyin_query)
     items = [dict(row) for row in rows]
     # 顶部统计必须基于完整命中集合。若先按某一侧排序并 LIMIT，选择
     # “卖出纪律”时前 200 条通常全是退出信号，会把买入/减仓错误显示为 0。
