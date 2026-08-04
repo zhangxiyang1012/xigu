@@ -212,6 +212,7 @@ class PositionPayload(BaseModel):
 
 class BacktestPayload(BaseModel):
     stock_codes: list[str]
+    execution_mode: str = "daily_next_open"
 
 
 @asynccontextmanager
@@ -727,6 +728,53 @@ async def discipline_rules():
     return {"rules": [dict(row) for row in rows]}
 
 
+async def backtest_performance(connection, run):
+    """股票等权汇总；单只股票内部将历次交易收益复利连接。"""
+    rows = await connection.fetch("""SELECT stock_code,buy_date,coalesce(sell_date,buy_date) exit_date,
+      return_pct,status FROM strategy_backtest_trades WHERE run_id=$1 ORDER BY stock_code,buy_date,id""", run["id"])
+    stock_factors, closed_returns, ordered_returns = {}, [], []
+    for row in rows:
+        value = number(row["return_pct"])
+        stock_factors[row["stock_code"]] = stock_factors.get(row["stock_code"], 1.0) * (1 + value / 100)
+        ordered_returns.append((row["exit_date"], value))
+        if row["status"] == "closed": closed_returns.append(value)
+    stock_count = max(1, int(run["stock_count"] or 0))
+    strategy_return = 100 * ((sum(stock_factors.values()) + stock_count - len(stock_factors)) / stock_count - 1)
+    elapsed_days = max(1, (run["end_date"] - run["start_date"]).days)
+    annualized = ((1 + strategy_return / 100) ** (365 / elapsed_days) - 1) * 100 if strategy_return > -100 else -100
+    equity = peak = 1.0
+    max_drawdown = 0.0
+    for _, value in sorted(ordered_returns, key=lambda item: item[0]):
+        equity *= 1 + value / 100
+        peak = max(peak, equity)
+        max_drawdown = min(max_drawdown, equity / peak - 1)
+    parameters = run["parameters"] if isinstance(run["parameters"], dict) else json.loads(run["parameters"] or "{}")
+    selected = parameters.get("stock_codes") or []
+    if selected:
+        benchmark_rows = await connection.fetch("""SELECT stock_code,
+          (array_agg(close ORDER BY trade_date))[1] first_close,
+          (array_agg(close ORDER BY trade_date DESC))[1] last_close
+          FROM daily_quotes WHERE stock_code::text=ANY($1::text[]) AND trade_date BETWEEN $2 AND $3
+          GROUP BY stock_code""", selected, run["start_date"], run["end_date"])
+    else:
+        benchmark_rows = await connection.fetch("""SELECT stock_code,
+          (array_agg(close ORDER BY trade_date))[1] first_close,
+          (array_agg(close ORDER BY trade_date DESC))[1] last_close
+          FROM daily_quotes WHERE trade_date BETWEEN $1 AND $2 GROUP BY stock_code""", run["start_date"], run["end_date"])
+    benchmark_values = [100 * (number(row["last_close"]) / number(row["first_close"]) - 1)
+                        for row in benchmark_rows if number(row["first_close"]) > 0]
+    benchmark_return = sum(benchmark_values) / len(benchmark_values) if benchmark_values else 0.0
+    initial_assets = 1_000_000.0
+    ending_assets = initial_assets * (1 + strategy_return / 100)
+    return {"strategy_return_pct": round(strategy_return, 4), "annualized_return_pct": round(annualized, 4),
+            "benchmark_return_pct": round(benchmark_return, 4), "excess_return_pct": round(strategy_return - benchmark_return, 4),
+            "trade_sequence_max_drawdown_pct": round(100 * max_drawdown, 4),
+            "initial_assets": round(initial_assets, 2), "ending_assets": round(ending_assets, 2),
+            "total_profit": round(ending_assets - initial_assets, 2), "net_deposit": 0.0,
+            "realized_profit_trades": sum(value > 0 for value in closed_returns),
+            "calculation": "券商账户口径：累计收益率=(期末总资产-期初总资产-净入金)÷期初总资产；回测无入出金，初始资金100万元；开放仓按期末价计价"}
+
+
 @app.get("/api/backtest/latest")
 async def latest_backtest():
     async with pool.acquire() as connection:
@@ -754,26 +802,48 @@ async def latest_backtest():
           e.strategy_name,e.matched_rules,e.execution_price,s.code,s.name,s.industry_name
           FROM strategy_backtest_events e JOIN stocks s ON s.code=e.stock_code WHERE e.run_id=$1
           ORDER BY e.signal_date DESC,e.id DESC LIMIT 100""", run["id"])
+        performance = await backtest_performance(connection, run)
     run_dict = dict(run)
     if isinstance(run_dict.get("parameters"), str): run_dict["parameters"] = json.loads(run_dict["parameters"])
-    return {"run": run_dict, "summaries": [dict(row) for row in summaries], "trades": dict(trade_stats),
+    return {"run": run_dict, "summaries": [dict(row) for row in summaries], "trades": dict(trade_stats), "performance": performance,
             "strategies": [dict(row) for row in strategies], "events": [dict(row) for row in events]}
 
 
 @app.post("/api/backtest/run")
 async def start_backtest(payload: BacktestPayload):
     from backtest_strategies import run
+    from minute_data import sync as sync_minute_data
     stock_codes = list(dict.fromkeys(code.strip() for code in payload.stock_codes if re.fullmatch(r"\d{6}", code.strip())))
     if not stock_codes:
         raise HTTPException(400, "请至少选择一只股票")
-    if len(stock_codes) > 50:
-        raise HTTPException(400, "单次最多回测50只股票")
+    if len(stock_codes) > 300:
+        raise HTTPException(400, "单次最多回测300只股票")
+    if payload.execution_mode not in {"daily_next_open", "intraday_30m", "multi_timeframe"}:
+        raise HTTPException(400, "不支持的成交模式")
+    if payload.execution_mode == "intraday_30m" and len(stock_codes) > 50:
+        raise HTTPException(400, "30分钟回测单次最多选择50只股票")
     async with pool.acquire() as connection:
         valid_count = await connection.fetchval("SELECT count(*) FROM stocks WHERE code::text=ANY($1::text[])", stock_codes)
         if valid_count != len(stock_codes):
             raise HTTPException(400, "选择中包含无效股票代码")
-        run_id, events, trades = await run(connection, stock_codes)
-    return {"run_id": run_id, "events": events, "trades": trades}
+        sync_result = None
+        if payload.execution_mode == "intraday_30m":
+            end_date = await connection.fetchval("SELECT max(trade_date) FROM daily_quotes")
+            try:
+                sync_result = await sync_minute_data(connection, stock_codes, end_date - timedelta(days=1095), end_date)
+            except RuntimeError as exc:
+                raise HTTPException(503, f"30分钟行情源暂不可用：{exc}") from exc
+            if sync_result["failures"]:
+                raise HTTPException(503, {"message": "30分钟行情同步失败", "failures": sync_result["failures"]})
+        if payload.execution_mode == "multi_timeframe":
+            covered = await connection.fetchval("""SELECT count(DISTINCT stock_code) FROM minute_quotes
+              WHERE interval_minutes=30 AND stock_code::text=ANY($1::text[])""", stock_codes)
+            if covered != len(stock_codes):
+                raise HTTPException(400, f"所选股票中仅{covered}/{len(stock_codes)}只有30分钟数据，请先完成回填")
+        run_id, events, trades = await run(connection, stock_codes, payload.execution_mode)
+        completed_run = await connection.fetchrow("SELECT * FROM strategy_backtest_runs WHERE id=$1", run_id)
+        performance = await backtest_performance(connection, completed_run)
+    return {"run_id": run_id, "events": events, "trades": trades, "performance": performance, "minute_sync": sync_result}
 
 
 @app.get("/api/position-model")

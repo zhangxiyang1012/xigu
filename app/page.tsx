@@ -73,7 +73,7 @@ type RadarSignal = Stock & {
 type DisciplineRule = {rule_key:string;rule_name:string;side:string;category:string;priority:number;description:string};
 type PortfolioPosition = RadarSignal & {quantity?:number;cost_price?:number;note?:string};
 type BacktestSummary = {side:string;horizon:string;trading_days:number;sample_count:number;avg_return_pct:number;median_return_pct:number;win_rate_pct:number;best_return_pct:number;worst_return_pct:number};
-type BacktestData = {run?:{id:number;status:string;start_date:string;end_date:string;stock_count:number;event_count:number;trade_count:number;parameters:Record<string,unknown>};summaries:BacktestSummary[];trades:Record<string,number>;strategies:{side:string;strategy:string;samples:number;avg_return_pct:number;win_rate_pct:number}[];events:{side:string;signal_date:string;execution_date:string;signal_level:string;strategy_name:string;matched_rules:string[];execution_price:number;code:string;name:string;industry_name:string}[]};
+type BacktestData = {run?:{id:number;status:string;start_date:string;end_date:string;stock_count:number;event_count:number;trade_count:number;parameters:Record<string,unknown>};summaries:BacktestSummary[];trades:Record<string,number>;performance?:{strategy_return_pct:number;annualized_return_pct:number;benchmark_return_pct:number;excess_return_pct:number;trade_sequence_max_drawdown_pct:number;initial_assets:number;ending_assets:number;total_profit:number;net_deposit:number;calculation:string};strategies:{side:string;strategy:string;samples:number;avg_return_pct:number;win_rate_pct:number}[];events:{side:string;signal_date:string;execution_date:string;signal_level:string;strategy_name:string;matched_rules:string[];execution_price:number;code:string;name:string;industry_name:string}[]};
 type PositionModel = {market?:{regime:string;factor:number;breadth:number;high_risk_share:number;trade_date:string};positions:{code:string;target_weight_pct:number;risk_weight_pct:number;stop_distance_pct:number;industry_factor:number;signal_factor:number;market_factor:number}[];limits?:Record<string,number>};
 type StockAnalysis = {
   fundamental?: {company_name?:string;main_business?:string;company_intro?:string;concepts?:{name:string;reason?:string}[]|string;report_date?:string;report_name?:string;revenue?:number;revenue_yoy?:number;net_profit?:number;net_profit_yoy?:number;gross_margin?:number;roe?:number;total_market_cap?:number;free_market_cap?:number;performance_support?:string;updated_at?:string};
@@ -386,18 +386,17 @@ function IndustryRotationMap({
   selected: string[];
 }) {
   const dates = Array.from(new Set(industries.flatMap(item=>item.history.map(point=>point.date)))).sort().slice(-90);
-  const weekEnds=dates.filter((_,index)=>index%5===4||index===dates.length-1);
-  const weekly=weekEnds.map(date=>({date,leaders:industries.map(item=>{
+  const daily=[...dates].reverse().map(date=>({date,leaders:industries.map(item=>{
     const point=[...item.history].reverse().find(value=>value.date<=date);
     return point?{item,point}:null;
   }).filter((value):value is {item:Industry;point:Industry["history"][number]}=>Boolean(value)).sort((a,b)=>b.point.score-a.point.score).slice(0,10)}));
-  if (!weekly.length) return <div className="rotation-empty">暂无行业轮动历史数据</div>;
+  if (!daily.length) return <div className="rotation-empty">暂无行业轮动历史数据</div>;
   return (
     <div className="rotation-map">
       <div className="rotation-map-head">
         <div>
-          <b>过去90个交易日 · 每周轮动 Top 10</b>
-          <span>按每周最后一个交易日的轮动强度排名，观察强势行业的进入、持续与退出</span>
+          <b>过去90个交易日 · 每日轮动 Top 10</b>
+          <span>按每个交易日的轮动强度排名，观察强势行业的进入、持续与退出；最新交易日在左侧</span>
         </div>
         <div className="rotation-legend">
           <span><i className="selected" />已选行业</span>
@@ -405,10 +404,10 @@ function IndustryRotationMap({
         </div>
       </div>
       <div className="weekly-rotation-scroll">
-        <div className="weekly-rotation" style={{gridTemplateColumns:`repeat(${weekly.length}, minmax(150px, 1fr))`}}>
-          {weekly.map(week=><section key={week.date} className="rotation-week">
-            <time>{week.date.slice(5)}</time>
-            {week.leaders.map(({item,point},index)=><div key={item.name} className={`${selected.includes(item.name)?"selected":""} ${point.risk>=65?"high-risk":""}`} title={`${item.name} ${week.date}\n轮动强度 ${point.score.toFixed(0)} · ${point.phase}\n风险 ${point.riskLevel} ${point.risk.toFixed(0)} · MA20上方 ${point.breadth.toFixed(0)}%`}>
+        <div className="weekly-rotation" style={{gridTemplateColumns:`repeat(${daily.length}, minmax(150px, 1fr))`}}>
+          {daily.map(day=><section key={day.date} className="rotation-week">
+            <time>{day.date.slice(5)}</time>
+            {day.leaders.map(({item,point},index)=><div key={item.name} className={`${selected.includes(item.name)?"selected":""} ${point.risk>=65?"high-risk":""}`} title={`${item.name} ${day.date}\n轮动强度 ${point.score.toFixed(0)} · ${point.phase}\n风险 ${point.riskLevel} ${point.risk.toFixed(0)} · MA20上方 ${point.breadth.toFixed(0)}%`}>
               <b>{index+1}</b><span>{item.name}</span><em>{point.score.toFixed(0)}</em>
             </div>)}
           </section>)}
@@ -522,6 +521,7 @@ export default function Home() {
     [backtestQuery,setBacktestQuery]=useState(""),
     [backtestResults,setBacktestResults]=useState<Stock[]>([]),
     [backtestStocks,setBacktestStocks]=useState<Stock[]>([]),
+    [backtestMode,setBacktestMode]=useState<"daily_next_open"|"intraday_30m"|"multi_timeframe">("multi_timeframe"),
     [backtestRunning,setBacktestRunning]=useState(false),
     [backtestError,setBacktestError]=useState(""),
     [positionModel,setPositionModel]=useState<PositionModel>({positions:[]}),
@@ -648,7 +648,7 @@ export default function Home() {
     if(!backtestStocks.length)return;
     setBacktestRunning(true);setBacktestError("");
     try{
-      const response=await fetch(`${API_BASE}/api/backtest/run`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({stock_codes:backtestStocks.map(stock=>stock.code)})});
+      const response=await fetch(`${API_BASE}/api/backtest/run`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({stock_codes:backtestStocks.map(stock=>stock.code),execution_mode:backtestMode})});
       const result=await response.json();
       if(!response.ok)throw Error(result.detail||"回测执行失败");
       const latest=await fetch(`${API_BASE}/api/backtest/latest`).then(r=>r.json());
@@ -1041,17 +1041,19 @@ export default function Home() {
             </div>
           </div>}
           {activeView==="backtest"&&<div className="backtest-panel">
-            <div className="section-title"><div><h2>三年交易纪律回测</h2><small>历史当日信号 → 下一交易日开盘模拟成交 → 多周期有效率评估</small></div><span>{backtestData.run?`${backtestData.run.start_date} 至 ${backtestData.run.end_date}`:"尚未运行"}</span></div>
+            <div className="section-title"><div><h2>三年交易纪律回测</h2><small>前日生成候选 → 次日30分钟线确认触发 → 下一根30分钟K模拟成交</small></div><span>{backtestData.run?`${backtestData.run.start_date} 至 ${backtestData.run.end_date}`:"尚未运行"}</span></div>
             <div className="backtest-selector">
               <div className="backtest-search-wrap"><label className="backtest-search"><span>⌕</span><input value={backtestQuery} onChange={event=>setBacktestQuery(event.target.value)} placeholder="搜索股票名称 / 代码 / 拼音，支持多选"/>{backtestQuery&&<button onClick={()=>setBacktestQuery("")} aria-label="清空搜索">×</button>}</label>{backtestResults.length>0&&<div className="backtest-search-results">{backtestResults.map(stock=><button key={stock.code} onClick={()=>{setBacktestStocks(current=>[...current,stock]);setBacktestQuery("");setBacktestResults([])}}><b>{stock.name}</b><span>{stock.code} · {stock.industry_name||stock.market}</span><em>＋ 加入回测</em></button>)}</div>}</div>
-              <button className="backtest-run" disabled={!backtestStocks.length||backtestRunning} onClick={runSelectedBacktest}>{backtestRunning?"正在回测…":`回测选中股票（${backtestStocks.length}）`}</button>
+              <select className="backtest-mode" value={backtestMode} disabled={backtestRunning} onChange={event=>setBacktestMode(event.target.value as "daily_next_open"|"intraday_30m"|"multi_timeframe")}><option value="multi_timeframe">30/60分钟/日线任一触发</option><option value="intraday_30m">30分钟二次确认</option><option value="daily_next_open">次日开盘基准</option></select>
+              <button className="backtest-run" disabled={!backtestStocks.length||backtestRunning} onClick={runSelectedBacktest}>{backtestRunning?(backtestMode==="intraday_30m"?"同步30分钟线并回测…":"正在回测…"):`回测选中股票（${backtestStocks.length}）`}</button>
               {!!backtestStocks.length&&<button className="backtest-clear" disabled={backtestRunning} onClick={()=>setBacktestStocks([])}>清空选择</button>}
               <div className="backtest-stock-chips">{backtestStocks.map(stock=><button key={stock.code} disabled={backtestRunning} onClick={()=>setBacktestStocks(current=>current.filter(item=>item.code!==stock.code))}><b>{stock.name}</b><small>{stock.code}</small><span>×</span></button>)}</div>
               {backtestError&&<p className="backtest-error">{backtestError}</p>}
             </div>
             {backtestData.run?<>
-              <div className="backtest-notes"><b>{backtestData.run.parameters?.scope==="selected"?"选股回测":"全市场回测"} · 无未来数据泄漏</b><span>买入：仅“买入确认”且无阻断项；卖出：减仓/退出、跌破买入防守位、时间止损或移动止盈；已计佣金、印花税和滑点。</span><em>{backtestData.run.stock_count}只股票 · {backtestData.run.event_count}个信号 · {backtestData.run.trade_count}笔交易</em></div>
-              <div className="backtest-cards"><div><small>已闭合交易</small><b>{Number(backtestData.trades.closed_count||0).toFixed(0)}</b></div><div><small>平均收益</small><b className={Number(backtestData.trades.avg_return_pct)<0?"trend-down":"trend-up"}>{Number(backtestData.trades.avg_return_pct||0).toFixed(2)}%</b></div><div><small>交易胜率</small><b>{Number(backtestData.trades.win_rate_pct||0).toFixed(1)}%</b></div><div><small>平均持有</small><b>{Number(backtestData.trades.avg_holding_days||0).toFixed(1)}日</b></div><div><small>最佳 / 最差</small><b>{Number(backtestData.trades.best_return_pct||0).toFixed(1)}% / {Number(backtestData.trades.worst_return_pct||0).toFixed(1)}%</b></div></div>
+              <div className="backtest-notes"><b>{backtestData.run.parameters?.scope==="selected"?"选股回测":"全市场回测"} · {backtestData.run.parameters?.execution_mode==="multi_timeframe"?"30/60分钟/日线任一触发":backtestData.run.parameters?.execution_mode==="intraday_30m"?"30分钟触发":"次日开盘基准"} · 无未来数据泄漏</b><span>{backtestData.run.parameters?.execution_mode==="multi_timeframe"?"三个周期任一满足即可；硬风险门槛仍具有否决权，已完成K线触发后由下一根30分钟K成交。":"日线生成候选，30分钟线确认后由下一根K成交。"} 已计佣金、印花税和滑点。</span><em>{backtestData.run.stock_count}只股票 · {backtestData.run.event_count}个信号 · {backtestData.run.trade_count}笔交易</em></div>
+              <div className="backtest-cards"><div><small>策略总收益</small><b className={Number(backtestData.performance?.strategy_return_pct)<0?"trend-down":"trend-up"}>{Number(backtestData.performance?.strategy_return_pct||0).toFixed(2)}%</b></div><div><small>年化收益</small><b className={Number(backtestData.performance?.annualized_return_pct)<0?"trend-down":"trend-up"}>{Number(backtestData.performance?.annualized_return_pct||0).toFixed(2)}%</b></div><div><small>同期基准</small><b className={Number(backtestData.performance?.benchmark_return_pct)<0?"trend-down":"trend-up"}>{Number(backtestData.performance?.benchmark_return_pct||0).toFixed(2)}%</b></div><div><small>超额收益</small><b className={Number(backtestData.performance?.excess_return_pct)<0?"trend-down":"trend-up"}>{Number(backtestData.performance?.excess_return_pct||0).toFixed(2)}%</b></div><div><small>交易序列最大回撤</small><b className="trend-down">{Number(backtestData.performance?.trade_sequence_max_drawdown_pct||0).toFixed(2)}%</b></div><div><small>已闭合 / 胜率</small><b>{Number(backtestData.trades.closed_count||0).toFixed(0)} / {Number(backtestData.trades.win_rate_pct||0).toFixed(1)}%</b></div><div><small>平均单笔收益</small><b className={Number(backtestData.trades.avg_return_pct)<0?"trend-down":"trend-up"}>{Number(backtestData.trades.avg_return_pct||0).toFixed(2)}%</b></div></div>
+              <p className="backtest-return-note">收益口径：{backtestData.performance?.calculation||"股票等权，单只股票交易复利"}；已计佣金、印花税和滑点。</p>
               <div className="backtest-section"><h3>买入与卖出信号的多周期有效率</h3><p>买入收益为信号后实际涨跌；卖出收益为“规避收益”，正数表示卖出后股价下跌、该卖出有效。</p><div className="backtest-horizon"><div className="backtest-horizon-row head"><b>周期</b><span>买入平均收益</span><span>买入胜率</span><span>买入样本</span><span>卖出规避收益</span><span>卖出有效率</span><span>卖出样本</span></div>{["1月","3月","半年","1年","2年","3年"].map(horizon=>{const buy=backtestData.summaries.find(x=>x.side==="buy"&&x.horizon===horizon),sell=backtestData.summaries.find(x=>x.side==="sell"&&x.horizon===horizon);return <div className="backtest-horizon-row" key={horizon}><b>{horizon}</b><span className={Number(buy?.avg_return_pct)<0?"trend-down":"trend-up"}>{buy?`${Number(buy.avg_return_pct).toFixed(2)}%`:"—"}</span><span>{buy?`${Number(buy.win_rate_pct).toFixed(1)}%`:"—"}</span><span>{buy?.sample_count||0}</span><span className={Number(sell?.avg_return_pct)<0?"trend-down":"trend-up"}>{sell?`${Number(sell.avg_return_pct).toFixed(2)}%`:"—"}</span><span>{sell?`${Number(sell.win_rate_pct).toFixed(1)}%`:"—"}</span><span>{sell?.sample_count||0}</span></div>})}</div></div>
               <div className="backtest-columns"><section><h3>策略分组表现</h3>{backtestData.strategies.slice(0,12).map(item=><div className="strategy-result" key={`${item.side}-${item.strategy}`}><b>{item.side==="buy"?"买":"卖"} · {item.strategy}</b><span>{item.samples}笔</span><em className={Number(item.avg_return_pct)<0?"trend-down":"trend-up"}>交易收益 {Number(item.avg_return_pct).toFixed(2)}% · 胜率 {Number(item.win_rate_pct).toFixed(1)}%</em></div>)}</section><section><h3>最近模拟节点</h3>{backtestData.events.slice(0,20).map(item=><div className="backtest-event" key={`${item.code}-${item.side}-${item.signal_date}`}><b className={item.side==="buy"?"trend-up":"trend-down"}>{item.side==="buy"?"买入":"卖出"}</b><span>{item.name} {item.code}</span><em>{item.signal_date} → {item.execution_date} · {item.strategy_name}</em><small>{(item.matched_rules||[]).join("；")}</small></div>)}</section></div>
               <div className="position-model"><h3>动态仓位管理模型 · 待纳入对照回测</h3><p><b>目标仓位 = 市场风险预算 × 行业轮动系数 × 个股信号系数 × 波动率调整</b></p><div><span>市场风险预算：正常100%、谨慎60%、系统风险30%</span><span>行业系数：前3名1.2，前10名1.0，其余0.5，高风险0</span><span>个股系数：买入确认1.0、候选0.5、观察0</span><span>ATR反算：单笔风险≤账户0.8%，单股≤15%，单行业≤35%</span></div></div>

@@ -4,3 +4,4 @@ asyncpg==0.30.0
 httpx==0.28.1
 apscheduler==3.11.0
 pypinyin==0.54.0
+rqdatac==3.6.1

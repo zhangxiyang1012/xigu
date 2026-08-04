@@ -25,6 +25,34 @@ CREATE TABLE IF NOT EXISTS daily_quotes (
 CREATE TABLE IF NOT EXISTS daily_quotes_default PARTITION OF daily_quotes DEFAULT;
 CREATE INDEX IF NOT EXISTS daily_quotes_date_idx ON daily_quotes (trade_date DESC);
 CREATE INDEX IF NOT EXISTS daily_quotes_stock_date_idx ON daily_quotes (stock_code, trade_date DESC);
+CREATE TABLE IF NOT EXISTS minute_quotes (
+  stock_code char(6) NOT NULL REFERENCES stocks(code) ON DELETE CASCADE,
+  trade_time timestamp NOT NULL,
+  interval_minutes smallint NOT NULL DEFAULT 30,
+  open numeric(16,4) NOT NULL, high numeric(16,4) NOT NULL,
+  low numeric(16,4) NOT NULL, close numeric(16,4) NOT NULL,
+  volume numeric(22,2) NOT NULL DEFAULT 0, amount numeric(22,2) NOT NULL DEFAULT 0,
+  source varchar(32) NOT NULL DEFAULT 'baostock', updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY(stock_code,trade_time,interval_minutes)
+);
+CREATE INDEX IF NOT EXISTS minute_quotes_time_idx ON minute_quotes(trade_time DESC);
+CREATE TABLE IF NOT EXISTS backtest_priority_stocks (
+  stock_code char(6) PRIMARY KEY REFERENCES stocks(code) ON DELETE CASCADE,
+  batch_name varchar(48) NOT NULL,
+  target_trading_days integer NOT NULL DEFAULT 548,
+  source varchar(32) NOT NULL DEFAULT 'wechat_screenshot',
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS minute_backfill_coverage (
+  batch_name varchar(48) NOT NULL,
+  stock_code char(6) NOT NULL REFERENCES stocks(code) ON DELETE CASCADE,
+  range_start date NOT NULL,
+  range_end date NOT NULL,
+  status varchar(16) NOT NULL,
+  rows_written integer NOT NULL DEFAULT 0,
+  completed_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY(batch_name,stock_code,range_start,range_end)
+);
 CREATE TABLE IF NOT EXISTS sync_runs (
   id bigserial PRIMARY KEY, sync_type varchar(32) NOT NULL, trade_date date, status varchar(16) NOT NULL,
   rows_written integer NOT NULL DEFAULT 0, started_at timestamptz NOT NULL DEFAULT now(), finished_at timestamptz, error text
@@ -158,6 +186,8 @@ CREATE TABLE IF NOT EXISTS strategy_backtest_events (
   forward_returns jsonb NOT NULL DEFAULT '{}'::jsonb,
   UNIQUE(run_id,stock_code,side,signal_date)
 );
+ALTER TABLE strategy_backtest_events ADD COLUMN IF NOT EXISTS execution_time timestamp;
+ALTER TABLE strategy_backtest_events ADD COLUMN IF NOT EXISTS execution_mode varchar(24) NOT NULL DEFAULT 'daily_next_open';
 CREATE INDEX IF NOT EXISTS backtest_events_run_side_idx ON strategy_backtest_events(run_id,side,signal_date);
 CREATE TABLE IF NOT EXISTS strategy_backtest_trades (
   id bigserial PRIMARY KEY, run_id bigint NOT NULL REFERENCES strategy_backtest_runs(id) ON DELETE CASCADE,
@@ -168,6 +198,9 @@ CREATE TABLE IF NOT EXISTS strategy_backtest_trades (
   sell_strategy varchar(48), sell_rules text[] NOT NULL DEFAULT ARRAY[]::text[],
   holding_days integer NOT NULL DEFAULT 0, return_pct numeric(12,4), status varchar(12) NOT NULL
 );
+ALTER TABLE strategy_backtest_trades ADD COLUMN IF NOT EXISTS buy_time timestamp;
+ALTER TABLE strategy_backtest_trades ADD COLUMN IF NOT EXISTS sell_time timestamp;
+ALTER TABLE strategy_backtest_trades ADD COLUMN IF NOT EXISTS execution_mode varchar(24) NOT NULL DEFAULT 'daily_next_open';
 CREATE TABLE IF NOT EXISTS strategy_backtest_summaries (
   run_id bigint NOT NULL REFERENCES strategy_backtest_runs(id) ON DELETE CASCADE,
   side varchar(12) NOT NULL, horizon varchar(8) NOT NULL, trading_days integer NOT NULL,
@@ -178,7 +211,7 @@ CREATE TABLE IF NOT EXISTS strategy_backtest_summaries (
 INSERT INTO discipline_rules(rule_key,rule_name,side,category,priority,description,parameters) VALUES
 ('B0_EXCLUSION','B0 基础排除','buy','gate',100,'ST/退市整理、上市不足120日、近20日均成交额低于1亿元、连续一字板、放量破位未止跌、行业退潮或系统性风险时不开新仓。','{}'::jsonb),
 ('B1_MARKET','B1 市场环境门槛','buy','gate',95,'市场不得处于系统性风险，主线核心股不可批量破位；大级别下降期只允许小仓位反弹策略。','{}'::jsonb),
-('B2_INDUSTRY','B2 行业门槛','buy','gate',90,'原则上只做行业综合强度前3名，并要求趋势、广度、龙头相对强度和回调量能同时健康。','{"maxRank":3}'::jsonb),
+('B2_INDUSTRY','B2 行业门槛','buy','gate',90,'行业综合强度前10名可正常参与；第11-20名仅在行业非高风险且个股技术结构满足时条件参与；20名以后不作标准买入确认。','{"preferredMaxRank":10,"conditionalMaxRank":20,"rejectHighRisk":true}'::jsonb),
 ('B3_CORE','B3 核心个股门槛','buy','selection',85,'优先行业核心股：相对行业强、MA20向上、站上MA20，且MA5≥MA10≥MA20或MA5上穿MA10。','{}'::jsonb),
 ('B4A_PULLBACK','B4-A 主线强势股缩量回调','buy','entry',80,'明确上升趋势中回调2-5日、量能递减至20日均量70%以下、振幅≤5%、不破MA20；至少两个拐点条件确认后才买入。','{"pullbackDays":[2,5],"maxVolumeRatio20":0.7,"maxAmplitudePct":5}'::jsonb),
 ('B4B_RECOVERY','B4-B 主线龙头深跌修复','buy','entry',75,'仅限历史验证的行业核心股；高点回撤15%-30%，出现止跌结构，行业未系统性下降，重新站上MA5且量能恢复。','{"drawdownMin":-30,"drawdownMax":-15}'::jsonb),

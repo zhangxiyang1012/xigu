@@ -1,4 +1,8 @@
+import asyncio
+import os
 from statistics import mean
+
+import asyncpg
 
 
 def avg(values):
@@ -55,6 +59,7 @@ async def refresh_one(connection, code):
     turn = close > ma5 and close > float(rows[-2]["high"]) and 1.05 <= vr5 <= 1.8
     shrinking_pullback = 2 <= pullback <= 5 and vr20 <= .8 and close >= ma20
     blockers, buy_signals, sell_signals = [], [], []
+    if rank and rank > 20: blockers.append("行业强度20名以后")
     if risk == "高": blockers.append("行业轮动高风险")
     if close < ma20 and vr20 >= 1: blockers.append("放量跌破MA20")
     if change <= -9.8: blockers.append("当日跌停")
@@ -62,7 +67,11 @@ async def refresh_one(connection, code):
     if shrinking_pullback: buy_signals.append(f"缩量回调{pullback}日")
     if turn: buy_signals.append("量价拐点确认")
     if active: buy_signals.append("近20日活跃核心候选")
-    score = (20 if rank and rank <= 3 else 10 if rank and rank <= 10 else 0)
+    if rank and rank <= 10:
+        buy_signals.append(f"行业强度前10（第{rank}）")
+    elif rank and rank <= 20 and risk != "高":
+        buy_signals.append(f"行业11-20名条件参与（第{rank}）")
+    score = (20 if rank and rank <= 3 else 15 if rank and rank <= 10 else 8 if rank and rank <= 20 and risk != "高" else 0)
     score += 20 if bull else 8 if close >= ma20 else 0
     score += 20 if shrinking_pullback else 0
     score += 15 if turn else 0
@@ -122,3 +131,15 @@ async def refresh(connection):
         except Exception as exc:
             print(f"discipline signal failed {row['code']}: {exc}")
     return count
+
+
+async def main():
+    connection = await asyncpg.connect(os.environ["DATABASE_URL"])
+    try:
+        print(f"refreshed {await refresh(connection)} stock discipline signals")
+    finally:
+        await connection.close()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
